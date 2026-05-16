@@ -183,6 +183,7 @@ tests.push(JobjeS.where('(seasons.winter:!!||spring:!!)', obj));
 // Paths and Conditions are considered separately:
 // the second condition has the seasons path prior to spring, but the first path (i.e. seasons) preceding winter has already taken affect.  
 // This means that the second path is looking for seasons.seasons, which doesn't exist.  
-// Because it cannot find that path, it fails to change the context, which supercedes the condition (i.e. spring:!!) and causes the parenthetical to fail as a whole, returning false.
+// Because it cannot find that path, it fails to change the context, which supercedes the condition (i.e. spring:!!) and causes the 
+//      parenthetical to fail as a whole, returning false.
 tests.push(JobjeS.where('(seasons.winter:!!||seasons.spring:!!)', obj));
 ```
