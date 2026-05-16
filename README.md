@@ -35,10 +35,10 @@ Below are the selects within the system:
 * `<key>` : 
     * any direct reference to a property name is termed a `"key"`, and will only match that key.  Within the current context, this will move the execution context to the content of that key.  Meaning that given the structure, `{ set: [ 1, 2, 3, 4 ], id: 'first' }`, the key `'set'` will result in the context moving to the array under set.  i.e. `[ 1, 2, 3, 4 ]`.
 
-* \* : 
+* `\*` : 
     * This select matches "any" key.  Meaning, within the structure, `{ set: [ 1, 2, 3, 4 ], id: 'first' }`, the `*` select would match the content of both `'set'` and `'id'`.
  
-* \*\*: 
+* `\*\*` : 
     * This select atches "any and all".  It does the same thing as `*`, but to every possible depth, traversing the entire structure and executing subsequent query details against each sub item.  Obviously, this is massively costly in terms of relative execution time, especially in large structures.
  
 Below are the value items within the system:
