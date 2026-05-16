@@ -65,3 +65,124 @@ To connect conditions and parentheticals, operators can be used.  The following 
  
 ## Import Final Note
 When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
+
+## Some Examples
+
+Given the structure:
+
+```
+const obj = {
+    'tests': [
+        { 
+            'label': 'Test', 
+            'outcome': true,
+            'projects': {
+                'duration': 'two weeks',
+                'personnel': '4',
+                'leader': 'Jared'
+            } 
+        },
+        { 
+            'label': 'Test2', 
+            'outcome': false,
+            'projects': {
+                'duration': 'a week',
+                'personnel': '7',
+                'leader': 'Scott'
+            } 
+        },
+        { 
+            'label': 'Test3', 
+            'outcome': false,
+            'projects': {
+                'duration': 'eight days',
+                'personnel': '2',
+                'leader': 'Jared'
+            } 
+        },
+        { 
+            'label': 'Test4', 
+            'outcome': true 
+        }
+    ],
+    'seasons': {
+        'winter': { 
+            'temperature': 'freezing', 
+            'duration': 'a few months', 
+            'activities': [ 
+                'skiing', 
+                'snowboarding' 
+            ] 
+        },
+        'spring': { 
+            'temperature': 'cold', 
+            'duration': 'a few months', 
+            'activities': [ 
+                'hiking', 
+                'kyaking' 
+            ] 
+        },
+        'summer': { 
+            'temperature': 'hot', 
+            'duration': 'a few months', 
+            'activities': [ 
+                'hiking', 
+                'running', 
+                'kyaking' 
+            ] 
+        },
+        'autumn': { 
+            'temperature': 'chilly', 
+            'duration': 'a few months', 
+            'activities': [ 
+                'hiking', 
+                'dirtbiking' 
+            ] 
+        }
+    }
+}
+```
+
+The following queries will result in their specified outcomes:
+```
+let tests = [];
+
+// result: 2
+tests.push(JobjeS.where('tests.2.projects.personnel', obj));
+
+// result: nothing
+tests.push(JobjeS.where('tests.2.projects.duration:\'a week\'.personnel', obj));
+
+// result: 2
+tests.push(JobjeS.where('tests.2.(projects.duration:\'eight days\').projects.personnel', obj));
+
+// result: 7
+tests.push(JobjeS.where('tests.*.(projects.duration:\'a week\').projects.personnel', obj));
+
+// result: the entire object
+tests.push(JobjeS.where('(tests.2.projects.personnel:!!)', obj));
+
+// result: no match (nothing)
+tests.push(JobjeS.where('tests.2.projects.personnel.!', obj));
+
+// result: { 'duration': 'a week', 'personnel': '7', 'leader': 'Scott' }
+tests.push(JobjeS.where('tests.1.projects.personnel:\'4\'||\'7\'', obj));
+
+// result: 2, 7
+tests.push(JobjeS.where('tests.*.(projects.duration:\'a week\')||(projects.duration:\'eight days\').projects.personnel', obj));
+
+// results: everything
+tests.push(JobjeS.where('((seasons.winter:!!)||(seasons.spring:!!))', obj));
+
+// result: everything
+tests.push(JobjeS.where('(seasons.winter:!!||spring:!!)', obj));
+
+// result: nothing
+// why, when the others return everything?
+//
+// Paths and Conditions are considered separately:
+// the second condition has the seasons path prior to spring, but the first path (i.e. seasons) preceding winter has already taken affect.  
+// This means that the second path is looking for seasons.seasons, which doesn't exist.  
+// Because it cannot find that path, it fails to change the context, which supercedes the condition (i.e. spring:!!) and causes the parenthetical to fail as a whole, returning false.
+tests.push(JobjeS.where('(seasons.winter:!!||seasons.spring:!!)', obj));
+```
