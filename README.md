@@ -63,5 +63,5 @@ To connect conditions and parentheticals, operators can be used.  The following 
 * `&&` : Ensures that all conditions / parentheticals in the chain evaluate as true.
 * `||` : Ensures that at least one of the conditions / parentheticals in the chain evaluate as true.
  
-[!NOTE]
+## Import Final Note
 When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
