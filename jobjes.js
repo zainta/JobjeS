@@ -777,21 +777,15 @@ export default class JobjeS {
      * @param {any} item The object to insert into the subject
      * @param {String | Number} key On objects, this is the property name to insert the item under.  For arrays, it should be the index.
      * 
-     * returns True upon success and false if the query returned nothing or a different form of failure occurred.
+     * returns the result (post modifications)
      */
     static insert(target, subject, item, key) {
+        outcome = this.#find(target, subject);
 
-    }
+        for (let i = 0; i < outcome.length; i++) {
+            outcome[i][key] = item;
+        }
 
-    /**
-     * Removes the items that match the query from the subject
-     * 
-     * @param {String} target A query indicating what should be deleted
-     * @param {Array | object} subject The object to execute against
-     * 
-     * returns the result
-     */
-    static delete(target, subject) {
-
+        return outcome;
     }
 }
