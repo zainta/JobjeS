@@ -1,6 +1,12 @@
 import { JobjeSTokeGenerator, TokeFamilies, TokeTypes } from "./jobjesTokeGenerator";
 import { duplicate, isJSIdentifier, isRegex } from "./jobjesUtility";
 
+/*
+Copyright (C) Zain T. Al-Ahmary
+
+MIT license.  I am not response for how you use or what happens as a result of what you use this for.
+*/
+
 /**
  * Represents every possible type of tokens
  */

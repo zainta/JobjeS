@@ -1,6 +1,12 @@
 import { JobjeSTokenizer, TokenSubTypes, TokenTypes } from './jobjesTokenizer';
 import { duplicate, isRegex } from './jobjesUtility';
 
+/*
+Copyright (C) Zain T. Al-Ahmary
+
+MIT license.  I am not response for how you use or what happens as a result of what you use this for.
+*/
+
 /**
  * JobjeS is short for JavaScript Object Search.
  * 
