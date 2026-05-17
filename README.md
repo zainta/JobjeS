@@ -1,7 +1,7 @@
 # JobjeS
 
 ## Introduction
-JobjeS is short for JavaScript Object Search.  It is a query language for validating and search array and object structures within JavaScript.
+JobjeS is short for JavaScript Object Search.  It is a query language for validating and searching array and object structures within JavaScript.
 
 ## Installation
 To install from NPM, use `npm i jobjes`.
