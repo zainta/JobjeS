@@ -1,0 +1,24 @@
+{
+  "name": "jobjes",
+  "version": "1.0.0",
+  "description": "JavaScript Object Search (JobjeS) allows a regular-expression-like query to be executed against an arbitrary array or object literal structure and returns any items that match the query.",
+  "keywords": [
+    "javascript",
+    "query"
+  ],
+  "homepage": "https://github.com/zainta/JobjeS#readme",
+  "bugs": {
+    "url": "https://github.com/zainta/JobjeS/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zainta/JobjeS.git"
+  },
+  "license": "ISC",
+  "author": "Zain T. Al-Ahmary",
+  "type": "module",
+  "main": "jobjes.mjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

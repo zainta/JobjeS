@@ -1,4 +1,4 @@
-import { duplicate, isJSIdentifier, isNumeric, isRegex } from "./jobjesUtility";
+import { duplicate, isJSIdentifier, isNumeric, isRegex } from "./jobjesUtility.mjs";
 
 /*
 Copyright (C) Zain T. Al-Ahmary

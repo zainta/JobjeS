@@ -1,5 +1,5 @@
-import { JobjeSTokeGenerator, TokeFamilies, TokeTypes } from "./jobjesTokeGenerator";
-import { duplicate, isJSIdentifier, isRegex } from "./jobjesUtility";
+import { JobjeSTokeGenerator, TokeFamilies, TokeTypes } from "./jobjesTokeGenerator.mjs";
+import { duplicate, isJSIdentifier, isRegex } from "./jobjesUtility.mjs";
 
 /*
 Copyright (C) Zain T. Al-Ahmary

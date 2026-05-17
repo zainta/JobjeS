@@ -1,5 +1,5 @@
-import { JobjeSTokenizer, TokenSubTypes, TokenTypes } from './jobjesTokenizer';
-import { duplicate, isRegex } from './jobjesUtility';
+import { JobjeSTokenizer, TokenSubTypes, TokenTypes } from './jobjesTokenizer.mjs';
+import { duplicate, isRegex } from './jobjesUtility.mjs';
 
 /*
 Copyright (C) Zain T. Al-Ahmary
