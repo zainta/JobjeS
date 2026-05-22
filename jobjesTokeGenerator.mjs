@@ -27,6 +27,7 @@ export const TokeTypes = {
 
     any: '*',
     anyAtAll: '**',
+    function: 'function',
 
     key: 'key',
     regex: 'regex',
@@ -125,6 +126,8 @@ export class JobjeSTokeGenerator {
                 this.#getNumbers();
             } else if (this.#peek() === "'") {
                 this.#getValue();
+            } else if (this.#peek() === ';') {
+                this.#getFunction();
             } else {
                 this.#getKey();
             }
@@ -435,6 +438,19 @@ export class JobjeSTokeGenerator {
         if (this.#log.length === 0) {
             this.#post(outcome);
         }
+    }    
+
+    //
+    #getFunction() {
+        const content = this.#pop();
+
+        let toke = {
+            type: TokeTypes.function,
+            family: TokeFamilies.key,
+            content: content
+        }
+
+        this.#post(toke);
     }
 
     // any text is an item, these will eventually become values and keys

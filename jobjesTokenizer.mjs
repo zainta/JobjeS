@@ -37,6 +37,7 @@ export const TokenSubTypes = {
     fullCondition: "fullCondition", // of the form  <key>:<value expection>
     positiveKey: "posKey", // preceded by nothing or the exists operator (!!)
     negativeKey: "negKey", // preceded by the not exists operataor (!)
+    function: "function", // a function call (of the form: <key>;<parameter bundle name>)
 }
 
 /**
@@ -47,11 +48,14 @@ export class JobjeSTokenizer {
     #work;
     #index;
     #log;
+    #parameterDictionary;
 
     /**
      * Create a tokenizer instance
+     * @param {object} paramDictionary A dictionary of key->parameter array sets for use with any function calls
      */
-    constructor() {
+    constructor(paramDictionary) {
+        this.#parameterDictionary = paramDictionary;
     }
 
     /**
@@ -112,7 +116,7 @@ export class JobjeSTokenizer {
                 } else if (this.#peek(1).type === TokeTypes.divider) {
                     this.#handleCondition();
                 } else if (this.#peek().family === TokeFamilies.expression) {
-                    this.#handleNestedCondition()
+                    this.#handleNestedCondition();
                 } else if (this.#peek().family === TokeFamilies.key) {
                     this.#handlePathRun();
                 } else if (this.#peek().family === TokeFamilies.operator) {
@@ -554,6 +558,68 @@ export class JobjeSTokenizer {
         return outcome;
     }
 
+    #handleFunction(precedingOperator, inline = false) {
+        const focus = (() => {
+            return !!this ? this : that
+        })();
+        // a path run is anything from a key to the key preceding a divider or an operator
+        let product = {
+            type: TokenTypes.key,
+            subType: TokenSubTypes.function,
+            content: [],
+            parameters: undefined,
+        }
+        if (!!precedingOperator) product.precedingOperator = precedingOperator;
+
+        if (focus.#peek().type === TokeTypes.key) {
+            // this is the property where the function lives
+            product.content.push(focus.#delete());
+
+            if (focus.#peek().type === TokeTypes.function) {
+                // next should be a semi colon (the function declaration)
+                product.content.push(focus.#delete());
+
+                // lastly, there should be either a positive value (a reference term for the function parameter dictionary provided),
+                // a separator, indicating this function has no parameters,
+                // or a divider, indicating this function is the opening key to a full condition
+                if (focus.#peek().type === TokeTypes.value) {
+                    // if we have a positive value, we have to ensure that the parameters were provided
+                    if (focus.#peek().content in focus.#parameterDictionary) {
+                        // we have it, store that for use by the interpreter static class
+                        product.parameters = [...focus.#parameterDictionary[focus.#delete().content]];
+                    } else {
+                        focus.#log.push({
+                            index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                            reason: `Function parameter set key not found in parameter dictionary.`
+                        });
+                    }
+                } else if ((focus.#peek().type === TokeTypes.separator) || (focus.#peek().type === TokeTypes.divider)) {
+                    // this is completion.
+                } else {
+                    focus.#log.push({
+                        index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                        reason: `Function parameter key or separator expected, but got '${focus.#peek().content}'.`
+                    });
+                }
+            } else {
+                focus.#log.push({
+                    index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                    reason: `Function declarator (;) expected, but got '${focus.#peek().content}'.`
+                });
+            }
+        } else {
+            focus.#log.push({
+                index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                reason: `Function key expected, but got '${focus.#peek().content}'.`
+            });
+        }
+
+        if (inline === false) {
+            focus.#post(product);
+        }
+        return product;
+    }
+
     #handlePathRun(precedingOperator, inline = false, that) {
         const focus = (() => {
             return !!this ? this : that
@@ -574,10 +640,38 @@ export class JobjeSTokenizer {
             focus.#peek().type !== TokeTypes.closeParenthesis &&
             (focus.#peek(1).type !== TokeTypes.divider || product.content.length === 0)) {
             if (focus.#peek().family === TokeFamilies.key) {
-                let key = focus.#delete();
-                key.subType = TokenSubTypes.positiveKey;
+                if (focus.#peek(1).type === TokeTypes.function) {
+                    const func = focus.#handleFunction(undefined, true);
 
-                product.content.push(key);
+                    // functions, like any key, can be used to open full conditions
+                    if (focus.#peek().type === TokeTypes.divider) {                 
+                        // if a full condition follows then 
+                        //      put the fully realized function back, 
+                        //      completely replacing the tokens that made it up the 
+                        //      conclude
+                        
+                        // a function is made up of two or three tokes.
+                        //      a key defining the name of the function in the container
+                        //      a semi colon declaring the function definition
+                        //      and optionally, a parameter reference term (the name of the item in the provided dictionary)
+                        // using the above knowledge, delete the original tokens based on the function definition
+                        const offsetAmount = (!!func.parameters ? 3 : 2);
+                        focus.#work.splice(this.#index - offsetAmount, offsetAmount);
+                        focus.#work.splice(focus.#index - offsetAmount, 0, func);
+
+                        // once the surgery is complete, set the index to point to the item just behind the function
+                        focus.#index = focus.#index - offsetAmount;
+                        break;
+                    } else {
+                        // just a key
+                        product.content.push(func);
+                    }
+                } else {
+                    let key = focus.#delete();
+                    key.subType = TokenSubTypes.positiveKey;
+
+                    product.content.push(key);
+                }
             } else if (focus.#peek().type === TokeTypes.separator) {
                 // conditions are not part of path runs, so only add the separator if a condition does not follow
                 if (focus.#peek(2).type !== TokeTypes.divider || product.content.length === 0) {
@@ -603,6 +697,10 @@ export class JobjeSTokenizer {
         }
 
         if (product.content.length === 0) {
+            // if the product has no content and the last token is a function key then skip this message
+            if (focus.#peek().subType === TokenSubTypes.function) {
+                return;
+            }
             focus.#log.push({
                 index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
                 reason: `Path run expected key, parenthetical, or seperator, but got '${focus.#peek().content}'.`

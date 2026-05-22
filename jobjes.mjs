@@ -60,6 +60,11 @@ MIT license.  I am not response for how you use or what happens as a result of w
  *          structure and executing subsequent query details against each sub item.  Obviously, this is massively costly in terms of 
  *          relative execution time, especially in large structures.
  * 
+ *   Function : A function call follows the form <key>;<parameter tag>.  A <parameter tag> is a term, 
+ *          provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.
+ *          If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and 
+ *          as the left part of a full condition.  
+ * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
  *          simply remove the key and divider (default ':').
@@ -75,6 +80,7 @@ MIT license.  I am not response for how you use or what happens as a result of w
  * 
  *   <key>:/regexp/ : regular expression, checks to see if the given <key>'s value matches the regular expression
  * 
+ * 
  *  To connect conditions and parentheticals, operators can be used.  The following operators are supported:
  * 
  *      && : Ensures that all conditions / parentheticals in the chain evaluate as true.
@@ -82,6 +88,7 @@ MIT license.  I am not response for how you use or what happens as a result of w
  * 
  * Note for usage:
  *      When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
+ * 
  * 
  */
 export default class JobjeS {
@@ -119,7 +126,6 @@ export default class JobjeS {
         return this.#defaultLog;
     }
 
-
     static #post(item, set, onEachFound) {
         if (set.includes(item) === false) {
             set.push(item);
@@ -130,10 +136,12 @@ export default class JobjeS {
     // merge two arrays without duplicates
     static #merge(set1, set2) {
         // use JSON.stringify to detect duplicates
-        let str1 = set1.map((item) => JSON.stringify(item));
+        /* let str1 = set1.map((item) => JSON.stringify(item));
         let str2 = set2.map((item) => JSON.stringify(item));
 
-        return [...(new Set(str1.concat(str2)))].map((item) => JSON.parse(item));
+        return [...(new Set(str1.concat(str2)))].map((item) => JSON.parse(item)); */
+
+        return set1.concat(set2);
     }
 
     static #allKeys(subject) {
@@ -150,15 +158,15 @@ export default class JobjeS {
      * @param {Array | object} subject The object to execute it against (an object or array)
      * @param {function} onEachFound This callback will be executed against each match found within the structure
      * @param {Array} externalLog The caller can provide an external call log to populate.  Otherwise, the log is discarded.
+     * @param {object} parameterDictionary A dictionary of key->parameter array sets for use with any function calls
      * 
      * Returns an array containing all matches
      */
-    static #find(query, subject, onEachFound, externalLog) {
+    static #find(query, subject, onEachFound, externalLog, parameterDictionary) {
         if (typeof query !== 'string') return [];
         if (typeof subject !== 'object' && !Array.isArray(subject)) return [];
 
-        // note that this will replace the tokenizer with the resulting tokens
-        const tokenizer = new JobjeSTokenizer();
+        const tokenizer = new JobjeSTokenizer(parameterDictionary);
         const tokens = tokenizer.Tokenize(query, JobjeS.#targetDivider, JobjeS.#pathseparator);
         if (tokens.length === 0)
             return [];
@@ -247,6 +255,13 @@ export default class JobjeS {
                 break;
             case TokenTypes.pathRun:
                 outcome = this.#resolvePathRun(step, container, key, result, onEachFound, log);
+                break;
+            case TokenTypes.key:
+                if (step.subType === TokenSubTypes.function) {
+                    outcome = this.#resolveFunction(step, container, key, result, onEachFound, log);
+                } else {
+                    log.push({ 'step': key, 'reason': `Unknown key sub type. ${JSON.stringify(step)}` });
+                }
                 break;
         }
 
@@ -362,7 +377,9 @@ export default class JobjeS {
     static #resolveCondition(step, container, key, result, onEachFound, log) {
         const executeCondition = (condition, container, key, previousOutcome) => {
             let outcome = false;
-            if (condition.type !== TokenTypes.condition) {
+            if (condition.type === TokenTypes.parenthetical) {
+                outcome = this.#resolveParenthetical(condition, container, key, result, onEachFound, log);
+            } else if (condition.type !== TokenTypes.condition) {
                 log.push({ 'step': key, 'reason': `Bad condition. ${JSON.stringify(condition)}` });
             } else {
                 if (key in container) {
@@ -395,9 +412,9 @@ export default class JobjeS {
                             if (isRegex(rule.content)) {
                                 const re = new RegExp(rule.content);
                                 if (typeof container[key] === 'string') {
-                                    outcome = container[key].match(re)?.length > 0;
+                                    outcome = container[key]?.match(re)?.length > 0;
                                 } else {
-                                    outcome = JSON.stringify(container[key]).match(re)?.length > 0;
+                                    outcome = JSON.stringify(container[key])?.match(re)?.length > 0;
                                 }
                             } else {
                                 log.push({ 'step': key, 'reason': `Regex condition did not contain valid regex. ${JSON.stringify(condition)}` });
@@ -421,7 +438,7 @@ export default class JobjeS {
             return outcome;
         }
 
-        const executeNestedCondition = (condition, container, key, previousOutcome) => {
+        const executeNestedCondition = (condition, operator, container, key, previousOutcome) => {
             let outcome = false;
             if (key in container) {
                 // the rule is the condition criteria
@@ -453,9 +470,9 @@ export default class JobjeS {
                         if (isRegex(rule.content)) {
                             const re = new RegExp(rule.content);
                             if (typeof container[key] === 'string') {
-                                outcome = container[key].match(re)?.length > 0;
+                                outcome = container[key]?.match(re)?.length > 0;
                             } else {
-                                outcome = JSON.stringify(container[key]).match(re)?.length > 0;
+                                outcome = JSON.stringify(container[key])?.match(re)?.length > 0;
                             }
                         } else {
                             log.push({ 'step': key, 'reason': `Regex condition did not contain valid regex. ${JSON.stringify(condition)}` });
@@ -464,6 +481,75 @@ export default class JobjeS {
                     default:
                         log.push({ 'step': key, 'reason': `Unknown condition type. ${JSON.stringify(condition)}` });
                         break;
+                }
+            }
+
+            if ((!!condition.precedingOperator || !!operator) && previousOutcome !== undefined) {
+                const op = !!condition.precedingOperator ? condition.precedingOperator : operator;
+
+                if (op.type === TokenTypes.or) {
+                    outcome = outcome || previousOutcome;
+                } else if (op.type === TokenTypes.and) {
+                    outcome = outcome && previousOutcome;
+                }
+            }
+
+            return outcome;
+        }
+
+        const executeFunctionCondition = (func, condition, container, key, previousOutcome) => {
+            let outcome = false;
+
+            // step 1, confirm and execute the function.
+            if (!!func) {
+                const funcOutcome = this.#resolveFunction(func, container, key, [], undefined, []);
+
+                // remember:
+                // we don't care if the function fails, 
+                // only that the outcome we *do* get from the function matches the condition
+                // that means we must get something in the matches array
+                if (!!funcOutcome.result) {
+                    const funcContainer = funcOutcome.result;
+                    const rule = condition.content[0];
+
+                    // now, compare the result from the function to the condition (the function's outcome is the container)
+                    switch (rule.type) {
+                        case TokenTypes.positiveValue:
+                            // a positive value check means that we expect the given key to have the given value
+                            outcome = funcContainer === rule.content;
+                            break;
+                        case TokenTypes.negativeValue:
+                            // a negative value check means that we expect the given key to not have the given value
+                            outcome = funcContainer !== rule.content;
+                            break;
+                        case TokenTypes.exists:
+                            // an exists check checks to see if the given key exists on the given container
+                            outcome = (!!funcContainer) === true;
+                            break;
+                        case TokenTypes.notexists:
+                            // a not exists check checks to see if the given key does not exist on the given container
+                            outcome = (!!funcContainer) === false;
+                            break;
+                        case TokenTypes.regex:
+                            // a regex check :
+                            //      applies the regular expression against the value within the given container 
+                            //      under the given key and returns if it matches
+
+                            if (isRegex(rule.content)) {
+                                const re = new RegExp(rule.content);
+                                if (typeof funcContainer === 'string') {
+                                    outcome = funcContainer.match(re)?.length > 0;
+                                } else {
+                                    outcome = JSON.stringify(funcContainer)?.match(re)?.length > 0;
+                                }
+                            } else {
+                                log.push({ 'step': key, 'reason': `Regex condition did not contain valid regex. ${JSON.stringify(condition)}` });
+                            }
+                            break;
+                        default:
+                            log.push({ 'step': key, 'reason': `Unknown condition type. ${JSON.stringify(condition)}` });
+                            break;
+                    }
                 }
             }
 
@@ -491,7 +577,9 @@ export default class JobjeS {
 
             // step 1, get the key
             if (step.content[0].type === TokenTypes.key) {
-                const conditionKey = step.content[0].content;
+                const conditionKey = step.content[0].subType === TokenSubTypes.function ?
+                    step.content[0].content[0].content :
+                    step.content[0].content;
 
                 // confirm that that token key matches the expected
                 if (conditionKey === key) {
@@ -506,12 +594,23 @@ export default class JobjeS {
                         // so loop through them and perform the logical operations
                         for (let i = 2; i < step.content.length; i++) {
                             const lastOutcome = conditionResults.slice(conditionResults.length - 1);
-                            conditionResults.push(
-                                executeCondition(
-                                    step.content[i],
-                                    container,
-                                    conditionKey,
-                                    lastOutcome.length === 1 ? lastOutcome[0] : undefined));
+
+                            if (step.content[0].subType === TokenSubTypes.function) {
+                                conditionResults.push(
+                                    executeFunctionCondition(
+                                        step.content[0],
+                                        step.content[i],
+                                        container,
+                                        conditionKey,
+                                        lastOutcome.length === 1 ? lastOutcome[0] : undefined));
+                            } else {
+                                conditionResults.push(
+                                    executeCondition(
+                                        step.content[i],
+                                        container,
+                                        conditionKey,
+                                        lastOutcome.length === 1 ? lastOutcome[0] : undefined));
+                            }
                         }
 
                         const lastOutcome = conditionResults.slice(conditionResults.length - 1);
@@ -548,6 +647,7 @@ export default class JobjeS {
                 conditionResults.push(
                     executeNestedCondition(
                         step.content[i],
+                        step.precedingOperator,
                         container,
                         key,
                         lastOutcome.length === 1 ? lastOutcome[0] : undefined));
@@ -715,7 +815,12 @@ export default class JobjeS {
                 //      execute the evauation method against each key in the current step 
                 //      and then overwrite them with the new set
                 workSets.forEach((item, index) => {
-                    const outcome = doStep(subStep, item.current, item.key, responses, onEachFound, log);
+                    let outcome;
+                    if (subStep.subType === TokenSubTypes.function) {
+                        outcome = this.#resolveFunction(subStep, item.current, item.key, responses, onEachFound, log);
+                    } else {
+                        outcome = doStep(subStep, item.current, item.key, responses, onEachFound, log);
+                    }
 
                     if (outcome.matched === true) {
                         resultingWork = this.#merge(resultingWork, outcome.work);
@@ -743,13 +848,73 @@ export default class JobjeS {
     }
 
     /**
+     * A function call is a key pointing to a property where a function is housed, 
+     * optionally paired with an array of parameters for the function
+     * @param {object} step The function call step to resolve
+     * @param {object | Array} container The current container within the queried structure
+     * @param {String} key The key pointing to the function in the container structure
+     * @param {Array} result The result array.  Populated by endpoint matches
+     * @param {function} onEachFound This callback will be executed against each match found within the structure. Single parameter: the object found
+     * @param {Array} log The operational log
+     * @returns An object of the form { matched: Boolean, container: *new focus* } 
+     */
+    static #resolveFunction(step, container, key, result, onEachFound, log) {
+        let outcome = {
+            matched: false,
+            result: undefined,
+            work: [],
+        };
+
+        if (!!container[key] && typeof container[key] === 'function') {
+            let funcResult;
+
+            try {
+                // execute the function
+                if (!!step.parameters) {
+                    funcResult = container[key](...step.parameters);
+                } else {
+                    funcResult = container[key]();
+                }
+
+                outcome.matched = true;
+                outcome.result = funcResult;
+            } catch (err) {
+                // we don't care if your function dies on transit, only that it didn't match (because it failed)
+                // the outcome of your function is the exception
+                outcome.result = err;
+            }
+        }
+
+        if (!!outcome.result) {
+            // generate the work items if there was an outcome
+            const nextKeys = typeof outcome.result === 'object' ?
+                Object.entries(outcome.result).map((set, index) => set[0]) :
+                (Array.isArray(outcome.result) ? outcome.result.keys() :
+                    []);
+
+            outcome = {
+                ...outcome,
+                keys: nextKeys,
+                work: nextKeys.length === 0 ?
+                    [{ key: key, current: outcome.result }] :
+                    nextKeys.map((k, i) => {
+                        return { key: k, current: outcome.result }
+                    })
+            };
+        }
+
+        return outcome;
+    }
+
+    /**
      * Checks to see if the given query matches the given structure.  Returns a boolean value indicating if any match was found.
      * 
      * @param {String} query The query string to execute against the subject
      * @param {Array | object} subject An object or array to query
+     * @param {object} parameterDictionary A dictionary of key->parameter array sets for use with any function calls
      */
-    static match(query, subject) {
-        return this.#find(query, subject)?.length > 0;
+    static match(query, subject, parameterDictionary) {
+        return this.#find(query, subject, undefined, undefined, parameterDictionary)?.length > 0;
     }
 
     /**
@@ -758,9 +923,10 @@ export default class JobjeS {
      * @param {String} query The query string to execute against the subject
      * @param {Array | object} subject An object or array to query
      * @param {function} actionCallback A function to call when something is found that matches
+     * @param {object} parameterDictionary A dictionary of key->parameter array sets for use with any function calls
      */
-    static with(query, subject, actionCallback) {
-        return this.#find(query, subject, actionCallback);
+    static with(query, subject, actionCallback, parameterDictionary) {
+        return this.#find(query, subject, actionCallback, undefined, parameterDictionary);
     }
 
     /**
@@ -768,11 +934,12 @@ export default class JobjeS {
      * 
      * @param {String} query The query string to execute against the subject
      * @param {Array | object} subject An object or array to query
+     * @param {object} parameterDictionary A dictionary of key->parameter array sets for use with any function calls
      *  
      * returns the result
      */
-    static where(query, subject) {
-        return this.#find(query, subject);
+    static where(query, subject, parameterDictionary) {
+        return this.#find(query, subject, undefined, undefined, parameterDictionary);
     }
 
     /**
@@ -782,11 +949,12 @@ export default class JobjeS {
      * @param {Array | object} subject The object to execute the query against
      * @param {any} item The object to insert into the subject
      * @param {String | Number} key On objects, this is the property name to insert the item under.  For arrays, it should be the index.
+     * @param {object} parameterDictionary A dictionary of key->parameter array sets for use with any function calls
      * 
      * returns the result (post modifications)
      */
-    static insert(target, subject, item, key) {
-        outcome = this.#find(target, subject);
+    static insert(target, subject, item, key, parameterDictionary) {
+        outcome = this.#find(target, subject, undefined, undefined, parameterDictionary);
 
         for (let i = 0; i < outcome.length; i++) {
             outcome[i][key] = item;

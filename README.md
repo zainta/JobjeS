@@ -43,6 +43,9 @@ Below are the selects within the system:
  
 * `**` : 
     * This select atches "any and all".  It does the same thing as `*`, but to every possible depth, traversing the entire structure and executing subsequent query details against each sub item.  Obviously, this is massively costly in terms of relative execution time, especially in large structures.
+
+* Function : 
+    * A function call follows the form `<key>;<parameter tag>`.  A `<parameter tag>` is a term, provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.  If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and as the left part of a full condition.  
  
 Below are the value items within the system:
 * Note that all definitions below are full conditions.  To convert them into nested conditions, simply remove the key and divider (default ':').
@@ -75,72 +78,74 @@ Given the structure:
 
 ```
 const obj = {
+    'func': () => { return { "greeting": "hi!", "action": { "jump": "10 feet" } } },
     'tests': [
-        { 
-            'label': 'Test', 
+        {
+            'label': 'Test',
             'outcome': true,
             'projects': {
                 'duration': 'two weeks',
                 'personnel': '4',
                 'leader': 'Jared'
-            } 
+            }
         },
-        { 
-            'label': 'Test2', 
+        {
+            'label': 'Test2',
             'outcome': false,
             'projects': {
                 'duration': 'a week',
                 'personnel': '7',
                 'leader': 'Scott'
-            } 
+            }
         },
-        { 
-            'label': 'Test3', 
+        {
+            'label': 'Test3',
             'outcome': false,
             'projects': {
                 'duration': 'eight days',
                 'personnel': '2',
                 'leader': 'Jared'
-            } 
+            }
         },
-        { 
-            'label': 'Test4', 
-            'outcome': true 
+        {
+            'label': 'Test4',
+            'outcome': true,
+            'jump': (height) => { return { "sound": "hup!", "height": height }; }
         }
     ],
     'seasons': {
-        'winter': { 
-            'temperature': 'freezing', 
-            'duration': 'a few months', 
-            'activities': [ 
-                'skiing', 
-                'snowboarding' 
-            ] 
+        'winter': {
+            'temperature': 'freezing',
+            'duration': 'a few months',
+            'activities': [
+                'skiing',
+                'snowboarding'
+            ]
         },
-        'spring': { 
-            'temperature': 'cold', 
-            'duration': 'a few months', 
-            'activities': [ 
-                'hiking', 
-                'kyaking' 
-            ] 
+        'spring': {
+            'temperature': 'cold',
+            'duration': 'a few months',
+            'activities': [
+                'hiking',
+                'kyaking'
+            ]
         },
-        'summer': { 
-            'temperature': 'hot', 
-            'duration': 'a few months', 
-            'activities': [ 
-                'hiking', 
-                'running', 
-                'kyaking' 
-            ] 
+        'summer': {
+            'temperature': 'hot',
+            'duration': 'a few months',
+            'activities': [
+                'hiking',
+                'running',
+                'kyaking'
+            ]
         },
-        'autumn': { 
-            'temperature': 'chilly', 
-            'duration': 'a few months', 
-            'activities': [ 
-                'hiking', 
-                'dirtbiking' 
-            ] 
+        'autumn': {
+            'temperature': 'chilly',
+            'duration': 'a few months',
+            'activities': [
+                'hiking',
+                'dirtbiking'
+            ]
         }
     }
 }
@@ -149,6 +154,22 @@ const obj = {
 The following queries will result in their specified outcomes:
 ```
 let tests = [];
+
+// result: everthing in the tests array
+// Note that full conditions did not originally support parentheticals as their direct condition.
+// This is new in version 1.1.0
+tests.push(JobjeS.where('tests.*.label:(\'Test\'||\'Test4\')', obj));
+
+// result: { 'label': 'Test4', 'outcome': true, 'jump': *function* }
+// in this example, 'test' is the parameter tag.  The third parameter to JobjeS.where is the parameter set,
+// where "test" is what the parameter references.
+tests.push(JobjeS.where('tests.3.jump;\'test\':/a week/', obj, { "test": ['a week'] }));
+
+// result: undefined (see the function it's calling and note that it is not providing a parameter)
+tests.push(JobjeS.where('tests.3.jump;.height', obj));
+
+// result: '10 feet'
+tests.push(JobjeS.where('func;.action.jump', obj));
 
 // result: 2
 tests.push(JobjeS.where('tests.2.projects.personnel', obj));
@@ -171,7 +192,7 @@ tests.push(JobjeS.where('tests.2.projects.personnel.!', obj));
 // result: { 'duration': 'a week', 'personnel': '7', 'leader': 'Scott' }
 tests.push(JobjeS.where('tests.1.projects.personnel:\'4\'||\'7\'', obj));
 
-// result: 2, 7
+// result: 7, 2
 tests.push(JobjeS.where('tests.*.(projects.duration:\'a week\')||(projects.duration:\'eight days\').projects.personnel', obj));
 
 // results: everything
@@ -184,9 +205,8 @@ tests.push(JobjeS.where('(seasons.winter:!!||spring:!!)', obj));
 // why, when the others return everything?
 //
 // Paths and Conditions are considered separately:
-// the second condition has the seasons path prior to spring, but the first path (i.e. seasons) preceding 
-//        winter has already taken affect.  
-// This means that the second path is looking for seasons.seasons, which doesn't exist.  
+// the second condition has the seasons path prior to spring condition, but the first path (i.e. seasons) preceding 
+// winter has already taken affect.  This means that the second path is looking for seasons.seasons, which doesn't exist.  
 // Because it cannot find that path, it fails to change the context, which supercedes the condition 
 //  (i.e. spring:!!) and causes the parenthetical to fail as a whole, returning false.
 tests.push(JobjeS.where('(seasons.winter:!!||seasons.spring:!!)', obj));
