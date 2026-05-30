@@ -3,7 +3,7 @@ import { duplicate, isJSIdentifier, isNumeric, isRegex } from "./jobjesUtility.m
 /*
 Copyright (C) Zain T. Al-Ahmary
 
-MIT license.  I am not response for how you use or what happens as a result of what you use this for.
+MIT license.  I am not responsible for how you use or what happens as a result of what you use this for.
 */
 
 /**
@@ -24,6 +24,7 @@ export const TokeTypes = {
 
     separator: 'separator',
     divider: 'divider',
+    filter: 'filter', // a filter turns a full condition into a select, and is defined with # replacing the normal divider  (e.g. <key>#<value>)
 
     any: '*',
     anyAtAll: '**',
@@ -120,6 +121,8 @@ export class JobjeSTokeGenerator {
                 this.#getRegex();
             } else if (this.#peek(0, 2) === '&&' || this.#peek(0, 2) === '||') {
                 this.#getLogicals();
+            } else if (this.#peek() === '#') {
+                this.#getFilter();
             } else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
                 this.#getBooleans();
             } else if (Number.isInteger(this.#peek())) {
@@ -338,6 +341,16 @@ export class JobjeSTokeGenerator {
                 family: TokeFamilies.operator,
                 content: this.#delete(2)
             };
+        }
+
+        this.#post(toke);
+    }    
+
+    #getFilter() {
+        let toke = {
+            type: TokeTypes.filter,
+            family: TokeFamilies.metadata,
+            content: this.#pop()
         }
 
         this.#post(toke);

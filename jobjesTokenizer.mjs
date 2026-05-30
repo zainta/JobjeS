@@ -4,7 +4,7 @@ import { duplicate, isJSIdentifier, isRegex } from "./jobjesUtility.mjs";
 /*
 Copyright (C) Zain T. Al-Ahmary
 
-MIT license.  I am not response for how you use or what happens as a result of what you use this for.
+MIT license.  I am not responsible for how you use or what happens as a result of what you use this for.
 */
 
 /**
@@ -13,6 +13,7 @@ MIT license.  I am not response for how you use or what happens as a result of w
 export const TokenTypes = {
     separator: 'separator',
     divider: 'divider',
+    filter: 'filter',
     regex: 'regex', // a regular expression
     key: 'key',  // a piece of text meant to represent a property name
 
@@ -33,6 +34,8 @@ export const TokenTypes = {
 
 export const TokenSubTypes = {
     none: "N/A", // this token type does not have sub types
+    normalDivider: 'normal-divider',
+    filterDivider: 'filter-divider',
     nestedCondition: "nestedCondition",  // of the form:  <expectation>  (no key association or divider)
     fullCondition: "fullCondition", // of the form  <key>:<value expection>
     positiveKey: "posKey", // preceded by nothing or the exists operator (!!)
@@ -113,7 +116,7 @@ export class JobjeSTokenizer {
             while (this.#end() === false && this.error() === false) {
                 if (this.#peek().type === TokeTypes.openParenthesis) {
                     this.#handleParenthetical();
-                } else if (this.#peek(1).type === TokeTypes.divider) {
+                } else if (this.#peek(1).type === TokeTypes.divider || this.#peek(1).type === TokeTypes.filter) {
                     this.#handleCondition();
                 } else if (this.#peek().family === TokeFamilies.expression) {
                     this.#handleNestedCondition();
@@ -250,7 +253,7 @@ export class JobjeSTokenizer {
                         [undefined, true],
                         `Failed to extract nested parenthetical.`
                     );
-                } else if (focus.#peek(1).type === TokeTypes.divider) {
+                } else if (focus.#peek(1).type === TokeTypes.divider || focus.#peek(1).type === TokeTypes.filter) {
                     focus.#addTo(
                         product.content,
                         focus.#handleCondition,
@@ -333,9 +336,23 @@ export class JobjeSTokenizer {
         if (!!precedingOperator) product.precedingOperator = precedingOperator;
 
         let outcome = undefined;
-        if (focus.#peek().type === TokeTypes.key && focus.#peek(1).type === TokeTypes.divider) {
+        if (focus.#peek().type === TokeTypes.key && (focus.#peek(1).type === TokeTypes.divider || focus.#peek(1).type === TokeTypes.filter)) {
             product.content.push(focus.#delete());
-            product.content.push(focus.#delete());
+
+            // to support filters, dividers and filters need metadata to help the interpreter handle them properly
+            if (focus.#peek().type === TokeTypes.divider) {                
+                let div = {
+                    ...focus.#delete(),
+                    subType: TokenSubTypes.normalDivider
+                };
+                product.content.push(div);
+            } else if (focus.#peek().type === TokeTypes.filter) {
+                let div = {
+                    ...focus.#delete(),
+                    subType: TokenSubTypes.filterDivider
+                };
+                product.content.push(div);
+            }
 
             while (
                 focus.#end() === false && focus.#peek().family === TokeFamilies.expression && focus.#peek().type !== TokeTypes.closeParenthesis) {
@@ -638,18 +655,18 @@ export class JobjeSTokenizer {
             focus.#peek().family !== TokeFamilies.operator &&
             focus.#peek().type !== TokeTypes.openParenthesis &&
             focus.#peek().type !== TokeTypes.closeParenthesis &&
-            (focus.#peek(1).type !== TokeTypes.divider || product.content.length === 0)) {
+            ((focus.#peek(1).type !== TokeTypes.divider && focus.#peek(1).type !== TokeTypes.filter) || product.content.length === 0)) {
             if (focus.#peek().family === TokeFamilies.key) {
                 if (focus.#peek(1).type === TokeTypes.function) {
                     const func = focus.#handleFunction(undefined, true);
 
                     // functions, like any key, can be used to open full conditions
-                    if (focus.#peek().type === TokeTypes.divider) {                 
+                    if (focus.#peek().type === TokeTypes.divider) {
                         // if a full condition follows then 
                         //      put the fully realized function back, 
                         //      completely replacing the tokens that made it up the 
                         //      conclude
-                        
+
                         // a function is made up of two or three tokes.
                         //      a key defining the name of the function in the container
                         //      a semi colon declaring the function definition

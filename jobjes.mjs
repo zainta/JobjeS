@@ -4,7 +4,7 @@ import { duplicate, isRegex } from './jobjesUtility.mjs';
 /*
 Copyright (C) Zain T. Al-Ahmary
 
-MIT license.  I am not response for how you use or what happens as a result of what you use this for.
+MIT license.  I am not responsible for how you use or what happens as a result of what you use this for.
 */
 
 /**
@@ -63,7 +63,9 @@ MIT license.  I am not response for how you use or what happens as a result of w
  *   Function : A function call follows the form <key>;<parameter tag>.  A <parameter tag> is a term, 
  *          provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.
  *          If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and 
- *          as the left part of a full condition.  
+ *          as the left part of a full condition. 
+ * 
+ *     Filter : A filter is identical to a full condition except that it acts like a select, advancing the context.
  * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
@@ -89,6 +91,11 @@ MIT license.  I am not response for how you use or what happens as a result of w
  * Note for usage:
  *      When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
  * 
+ * version 1.1.0:
+ *      Added functions
+ * 
+ * version 1.2.0:
+ *      Added filters and fixed a bug in parentheticals
  * 
  */
 export default class JobjeS {
@@ -378,7 +385,7 @@ export default class JobjeS {
         const executeCondition = (condition, container, key, previousOutcome) => {
             let outcome = false;
             if (condition.type === TokenTypes.parenthetical) {
-                outcome = this.#resolveParenthetical(condition, container, key, result, onEachFound, log);
+                outcome = this.#resolveParenthetical(condition, container, key, result, onEachFound, log)?.matched;
             } else if (condition.type !== TokenTypes.condition) {
                 log.push({ 'step': key, 'reason': `Bad condition. ${JSON.stringify(condition)}` });
             } else {
@@ -585,8 +592,8 @@ export default class JobjeS {
                 if (conditionKey === key) {
 
                     // step 2, confirm that a colon is next
-                    if (step.content[1].type === TokenTypes.divider) {
-                        // skip it.  we don't care, it just separates the key and the rule
+                    if (step.content[1].type === TokenTypes.divider || step.content[1].type === TokenTypes.filter) {
+                        // if it's a normal divider then skip it.  we don't care, it just separates the key and the rule
 
                         let conditionResults = !!step.precedingOutcome ? [step.precedingOutcome] : [];
                         // step 3, get the condition tokens.
@@ -618,7 +625,7 @@ export default class JobjeS {
                         outcome = {
                             matched: lastOutcome.length === 1 ? lastOutcome[0] : false,
                             matches: [{ key: key, current: container }],
-                            isSelect: false,
+                            isSelect: step.content[1].type === TokenTypes.filter, // the only difference between a filter and a normal full condition is that filters act as selects
                             type: 'full'
                         };
                     } else {

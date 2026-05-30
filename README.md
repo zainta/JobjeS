@@ -1,5 +1,14 @@
 # JobjeS
 
+# Version Information
+
+* Initial Version -- 1.0.1
+
+* 1.1.0
+    * Functions
+* 1.2.0
+    * Filters
+
 ## Introduction
 JobjeS is short for JavaScript Object Search.  It is a query language for validating and searching array and object structures within JavaScript.
 
@@ -46,6 +55,10 @@ Below are the selects within the system:
 
 * Function : 
     * A function call follows the form `<key>;<parameter tag>`.  A `<parameter tag>` is a term, provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.  If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and as the left part of a full condition.  
+
+
+* Filter : 
+    * A filter is identical to a full condition except that it acts like a select.  Filters advance the context.  Filters replace the normal divider (default: ':') with a number symbol '#'.
  
 Below are the value items within the system:
 * Note that all definitions below are full conditions.  To convert them into nested conditions, simply remove the key and divider (default ':').
@@ -155,14 +168,12 @@ The following queries will result in their specified outcomes:
 ```
 let tests = [];
 
-// result: everthing in the tests array
-// Note that full conditions did not originally support parentheticals as their direct condition.
-// This is new in version 1.1.0
+// below is an example of the new filter functionality.
+// result: Test and Test4, either the content of the label field (first example) or the container object (second example)
+tests.push(JobjeS.where('tests.*.label#(\'Test\'||\'Test4\')', obj));
 tests.push(JobjeS.where('tests.*.label:(\'Test\'||\'Test4\')', obj));
 
 // result: { 'label': 'Test4', 'outcome': true, 'jump': *function* }
-// in this example, 'test' is the parameter tag.  The third parameter to JobjeS.where is the parameter set,
-// where "test" is what the parameter references.
 tests.push(JobjeS.where('tests.3.jump;\'test\':/a week/', obj, { "test": ['a week'] }));
 
 // result: undefined (see the function it's calling and note that it is not providing a parameter)

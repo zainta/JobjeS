@@ -14,9 +14,6 @@
     "type": "git",
     "url": "git+https://github.com/zainta/JobjeS.git"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com/@zainta"
-  },
   "license": "ISC",
   "author": "Zain T. Al-Ahmary",
   "type": "module",
