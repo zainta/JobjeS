@@ -13,6 +13,13 @@ export const TokeTypes = {
     openParenthesis: '(',
     closeParenthesis: ')',
 
+    startSubquery: '[', 
+    endSubquery: ']',
+    sequence: ',', 
+    mergeSequence: '+', 
+    objectize: '>',
+    enumerate: '<',
+
     number: '#',
     value: "value",
     true: 'true',
@@ -41,6 +48,7 @@ export const TokeFamilies = {
     expression: 'expression',
     operator: 'operator',
     metadata: 'meta',
+    sequencing: 'subquery operator',
     key: 'key',
 }
 
@@ -115,6 +123,8 @@ export class JobjeSTokeGenerator {
                 this.#getWildcards(); // * and **
             } else if (this.#peek() === '(' || this.#peek() === ')') {
                 this.#getParenthesisBorder(); // ( and )
+            } else if (this.#peek() === '[' || this.#peek() === ']') {
+                this.#getSubqueryBorder(); // [ and ]
             } else if (this.#peek(0, this.#divider.length) === this.#divider) {
                 this.#getDivider();
             } else if (this.#peek() === '/' && this.#peek(0, 2) !== '//') {
@@ -123,6 +133,14 @@ export class JobjeSTokeGenerator {
                 this.#getLogicals();
             } else if (this.#peek() === '#') {
                 this.#getFilter();
+            } else if (this.#peek() === ',') {
+                this.#getSequenceMarker();
+            } else if (this.#peek() === '+') {
+                this.#getMergeSequenceMarker();
+            } else if (this.#peek() === '>') {
+                this.#getObjectizeMarker();
+            } else if (this.#peek() === '<') {
+                this.#getArraydicateMarker();
             } else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
                 this.#getBooleans();
             } else if (Number.isInteger(this.#peek())) {
@@ -272,6 +290,18 @@ export class JobjeSTokeGenerator {
         this.#post(toke);
     }
 
+    #getSubqueryBorder() {
+        const content = this.#pop();
+
+        let toke = {
+            type: content === '[' ? TokeTypes.startSubquery : TokeTypes.endSubquery,
+            family: TokeFamilies.key,
+            content: content
+        }
+
+        this.#post(toke);
+    }
+
     #getRegex() {
         let outcome = undefined;
 
@@ -349,6 +379,46 @@ export class JobjeSTokeGenerator {
     #getFilter() {
         let toke = {
             type: TokeTypes.filter,
+            family: TokeFamilies.metadata,
+            content: this.#pop()
+        }
+
+        this.#post(toke);
+    }
+
+    #getSequenceMarker() {
+        let toke = {
+            type: TokeTypes.sequence,
+            family: TokeFamilies.sequencing,
+            content: this.#pop()
+        }
+
+        this.#post(toke);
+    }
+
+    #getMergeSequenceMarker() {
+        let toke = {
+            type: TokeTypes.mergeSequence,
+            family: TokeFamilies.sequencing,
+            content: this.#pop()
+        }
+
+        this.#post(toke);
+    }
+
+    #getObjectizeMarker() {
+        let toke = {
+            type: TokeTypes.objectize,
+            family: TokeFamilies.metadata,
+            content: this.#pop()
+        }
+
+        this.#post(toke);
+    }
+
+    #getArraydicateMarker() {
+        let toke = {
+            type: TokeTypes.enumerate,
             family: TokeFamilies.metadata,
             content: this.#pop()
         }

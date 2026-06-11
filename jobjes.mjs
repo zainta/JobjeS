@@ -17,6 +17,14 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * It follows the form:
  * <item>.<item>.etc.
  * 
+ * Queries are broken up into subqueries.  These can be defined explicitly with square brackets ([]) or implicitly (they are used behind the scenes anyway)
+ * Multiple queries can be executed in sequence (note that context resets between subqueries) via the sequence operator (,) and merge operator (+).
+ * The merge operator concatenates results between the merged queries, but otherwise does not modify them.  The sequence operator carries each set as its own array.
+ * 
+ * e.g. <item>.<item>,<item>.<item>+<item>.<item>
+ * 
+ * This allows batch execution of multiple queries against a single object.
+ * 
  * There are three key terms in the way queries are executed:
  *      Selects:
  *          A select is anything that moves the context forward.  This is limited to paths.
@@ -88,6 +96,14 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *      && : Ensures that all conditions / parentheticals in the chain evaluate as true.
  *      || : Ensures that at least one of the conditions / parentheticals in the chain evaluate as true.
  * 
+ *   Subqueries support post operators. (placed immediately following the query itself)  
+ *   The support the follow:
+ * 
+ *      > :
+ *          The '>' post operator maintains the state of object results from queries.  This will, for example, return a clean array of objects from the '*' operator, rather than every object and its properties.
+ *      < :
+ *          The '<' post operator enumerates the query results. This, for example, will return an array of the properties in an object literal rather than the object itself.
+ * 
  * Note for usage:
  *      When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
  * 
@@ -96,6 +112,9 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * 
  * version 1.2.0:
  *      Added filters and fixed a bug in parentheticals
+ * 
+ * version 1.3.0:
+ *      Added subqueries, objectization, and enumeration
  * 
  */
 export default class JobjeS {
@@ -178,7 +197,7 @@ export default class JobjeS {
         if (tokens.length === 0)
             return [];
 
-        let result = [];
+        let completeResult = [];
         this.#defaultLog = [];
         let log = !!externalLog ? externalLog : this.#defaultLog;
 
@@ -189,11 +208,41 @@ export default class JobjeS {
             (Array.isArray(subject) ? subject.keys() :
                 []);
 
-        keys.forEach((key, index) => {
-            this.#resolve(duplicate(tokens), subject, key, result, onEachFound, log);
+        // tokens will contain a list of subqueries
+        // this could be only one, but it could be huge, too
+        // loop through them, giving them their each result array, until done
+        tokens.forEach((sequence, index) => {
+            let result = [];
+            keys.forEach((key, index) => {
+                this.#resolve(duplicate(sequence.content), subject, key, result, onEachFound, log, sequence.postOperation);
+            });
+
+            if (!!sequence.sequencer) {
+                switch (sequence.sequencer.type) {
+                    case TokenTypes.sequence: // one after another
+                        completeResult.push(result);
+                        break;
+                    case TokenTypes.mergeSequence: // combine with the previous
+                        const last = completeResult.splice(completeResult.length - 1, 1);
+                        // only way this should ever fail is if, somehow, there is a merge on the first sequence 
+                        // (which will be error-lessly ignored)
+                        if (last.length === 1) {
+                            completeResult.push(last.concat(result));
+                        } else {
+                            completeResult.push(result);
+                        }
+                        break;
+                }
+            } else {
+                completeResult.push(result);
+            }
         });
 
-        return result;
+        if (completeResult.length === 1) {
+            return completeResult[0];
+        } else {
+            return completeResult;
+        }
     }
 
     /**
@@ -204,9 +253,10 @@ export default class JobjeS {
      * @param {Array} result The result array.  Populated by endpoint matches
      * @param {function} onEachFound This callback will be executed against each match found within the structure. Single parameter: the object found
      * @param {Array} log The operational log
+     * @param {object} postOperation the post operation to perform, if any
      * @returns An object of the form { matched: Boolean, container: *new focus* } 
      */
-    static #resolve(querySteps, container, key, result, onEachFound, log) {
+    static #resolve(querySteps, container, key, result, onEachFound, log, postOperation) {
         let outcome;
 
         // a select operation traverses the structure while non-selects do not.
@@ -311,7 +361,8 @@ export default class JobjeS {
                                 outcome.matches[i].key,
                                 result,
                                 onEachFound,
-                                log);
+                                log,
+                                postOperation);
                         }
 
                         // note that resolve doesn't actually ever return anything.
@@ -321,12 +372,58 @@ export default class JobjeS {
                 }
             } else {
                 // this is the end of our search, and our target
-                if (outcome.isSelect !== false || outcome.type === 'nested') {
-                    for (let i = 0; i < outcome.matches.length; i++) {
-                        this.#post(outcome.matches[i].current[outcome.matches[i].key], result, onEachFound);
+                if (postOperation?.objectize === true) {
+                    // objectize maintains the object state of items returned,
+                    // rather than returning their contents (as is the normal behavior)
+                    if (!!outcome.container) {
+                        if (Array.isArray(outcome.container)) {
+                            outcome.container.forEach((item, index) => {
+                                this.#post(item, result, onEachFound);
+                            });
+                        } else if (typeof outcome.container === 'object') {
+                            // single objects are returned as so
+                            this.#post(outcome.container, result, onEachFound);
+                        }
                     }
+                } else if (postOperation?.enumerate === true) {
+                    // enumeration converts single objects into arrays of their properties' values
+                    // and converts objects in an array in the same manner, but leaves nested arrays alone
+                    let uniqueProcessed = [];
+
+                    // convert each result into a key array
+                    outcome.matches.forEach((subject, index) => {
+                        if (uniqueProcessed.includes(subject.current) === false) {
+                            const expandAndPost = (obj) => {
+                                if (Array.isArray(obj)) {
+                                    this.#post(obj, result, onEachFound);
+                                } else {
+                                    const keys = Object.entries(obj).map((set, index) => set[0]);
+
+                                    this.#post(
+                                        keys.map((key, index) => obj[key]),
+                                        result,
+                                        onEachFound
+                                    );
+                                }
+                            }
+
+                            if (typeof subject.current === 'object') {
+                                expandAndPost(subject.current);
+                            } else if (Array.isArray(subject.current)) {
+                                subject.current.forEach((item, index) => expandAndPost(item));
+                            }
+
+                            uniqueProcessed.push(subject.current);
+                        }
+                    });
                 } else {
-                    this.#post(container, result, onEachFound);
+                    if (outcome.isSelect !== false || outcome.type === 'nested') {
+                        for (let i = 0; i < outcome.matches.length; i++) {
+                            this.#post(outcome.matches[i].current[outcome.matches[i].key], result, onEachFound);
+                        }
+                    } else {
+                        this.#post(container, result, onEachFound);
+                    }
                 }
             }
         }
@@ -689,6 +786,7 @@ export default class JobjeS {
         const doStep = (subStep, target, key, results, onEachFound, log) => {
             let outcome = {
                 matched: false,
+                container: undefined,
                 keys: [],
                 work: []
             };
@@ -704,6 +802,7 @@ export default class JobjeS {
                         outcome = {
                             matched: true,
                             keys: nextKeys,
+                            container: target,
                             work: nextKeys.length === 0 ?
                                 [{ key: key, current: target }] :
                                 nextKeys.map((k, i) => {
@@ -733,6 +832,7 @@ export default class JobjeS {
                         outcome = {
                             matched: true,
                             keys: nextKeys,
+                            container: target,
                             work: nextKeys.length === 0 ?
                                 [{ key: key, current: target }] :
                                 nextKeys.map((k, i) => {
@@ -751,6 +851,7 @@ export default class JobjeS {
                 outcome = {
                     matched: true,
                     keys: nextKeys,
+                    container: target,
                     work: nextKeys.length === 0 ?
                         [{ key: key, current: target }] :
                         nextKeys.map((k, i) => {
@@ -785,14 +886,13 @@ export default class JobjeS {
                 outcome = {
                     matched: true,
                     keys: nextKeys,
+                    container: target,
                     work: nextKeys.length === 0 ?
                         [{ key: key, current: target }] :
                         nextKeys.map((k, i) => {
                             return { key: k, current: target[key] }
                         })
                 };
-            } else if (subStep.type === TokenTypes.parenthetical) {
-                this.#resolveParenthetical(step, target, key, results, onEachFound, log);
             }
 
             return outcome;
@@ -804,6 +904,8 @@ export default class JobjeS {
 
         // the keys (in container) that will be further processed, according to matching conditions
         let furtherKeys = [];
+
+        let matchContainer = undefined;
 
         let workSets = [{ key: key, current: container }];
         for (let i = 0; i < step.content.length; i++) {
@@ -831,6 +933,7 @@ export default class JobjeS {
 
                     if (outcome.matched === true) {
                         resultingWork = this.#merge(resultingWork, outcome.work);
+                        matchContainer = outcome.container;
                     }
                 });
             }
@@ -850,7 +953,8 @@ export default class JobjeS {
 
         return {
             matched: furtherKeys.length > 0,
-            matches: furtherKeys  // matches is the keys that match
+            matches: furtherKeys,  // matches is the keys that match
+            container: matchContainer
         };
     }
 

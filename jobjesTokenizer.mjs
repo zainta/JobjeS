@@ -16,11 +16,16 @@ export const TokenTypes = {
     filter: 'filter',
     regex: 'regex', // a regular expression
     key: 'key',  // a piece of text meant to represent a property name
+    subquery: 'subquery',
 
     exists: '!!', // !!
     notexists: '!', // !
     any: '*', // *
     anyAtAll: '**', // **
+    sequence: ',',
+    mergeSequence: '+',
+    objectize: '>',
+    enumerate: '<',
 
     or: '||', // ||, used in conditions to denote that either option can be true
     and: '&&', // &&, used in conditions to denote that both options must be true
@@ -41,6 +46,7 @@ export const TokenSubTypes = {
     positiveKey: "posKey", // preceded by nothing or the exists operator (!!)
     negativeKey: "negKey", // preceded by the not exists operataor (!)
     function: "function", // a function call (of the form: <key>;<parameter bundle name>)
+    sequencing: 'subquery operator', // used to connect subqueries
 }
 
 /**
@@ -113,19 +119,37 @@ export class JobjeSTokenizer {
 
             // we already have tokes, so we're going to loop through and assemble full tokens for the main class to interpret
             // this will create arrangements that make solving easier, and should make the code simpler in the long run
+            let subqueryOperator = undefined;
             while (this.#end() === false && this.error() === false) {
-                if (this.#peek().type === TokeTypes.openParenthesis) {
-                    this.#handleParenthetical();
-                } else if (this.#peek(1).type === TokeTypes.divider || this.#peek(1).type === TokeTypes.filter) {
-                    this.#handleCondition();
-                } else if (this.#peek().family === TokeFamilies.expression) {
-                    this.#handleNestedCondition();
-                } else if (this.#peek().family === TokeFamilies.key) {
-                    this.#handlePathRun();
-                } else if (this.#peek().family === TokeFamilies.operator) {
-                    this.#handleOperator();
+                this.#handleSubquery(subqueryOperator);
+
+                if (this.error() === true) {
+                    break;
                 } else {
-                    this.#handleCopyOver();
+                    if (this.#peek().type === TokeTypes.sequence) {
+                        this.#delete(); // discard the toke
+                        subqueryOperator = {
+                            type: TokenTypes.sequence,
+                            subType: TokenSubTypes.sequencing,
+                            content: TokenTypes.sequence
+                        };
+                    } else if (this.#peek().type === TokeTypes.mergeSequence) {
+                        this.#delete(); // discard the toke
+                        subqueryOperator = {
+                            type: TokenTypes.mergeSequence,
+                            subType: TokenSubTypes.sequencing,
+                            content: TokenTypes.mergeSequence
+                        };
+                    } else {
+                        if (this.#end() !== false) {
+                            this.#log.push({
+                                index: this.#index,
+                                reason: `Unexpected toke found.  '${this.#peek().content}'`
+                            });
+                        } else {
+                            subqueryOperator = undefined;
+                        }
+                    }
                 }
             }
         }
@@ -322,6 +346,97 @@ export class JobjeSTokenizer {
         return outcome;
     }
 
+    #handleSubquery(sequenceOperator, inline = false) {
+        const focus = (() => {
+            return !!this ? this : that
+        })();
+
+        let product = {
+            type: TokenTypes.subquery,
+            subType: TokenSubTypes.none,
+            content: [],
+            sequencer: sequenceOperator,
+            postOperation: []
+        }
+
+        const handleSubQuery = () => {
+            while (
+                focus.#end() === false && focus.error() === false &&
+                focus.#peek().type !== TokeTypes.endSubquery &&
+                focus.#peek().type !== TokeTypes.sequence &&
+                focus.#peek().type !== TokeTypes.mergeSequence &&
+                focus.#peek().type !== TokeTypes.objectize &&
+                focus.#peek().type !== TokeTypes.enumerate
+            ) {
+
+                if (focus.#peek().type === TokeTypes.openParenthesis) {
+                    product.content.push(focus.#handleParenthetical(undefined, true));
+                } else if (focus.#peek(1).type === TokeTypes.divider || focus.#peek(1).type === TokeTypes.filter) {
+                    product.content.push(focus.#handleCondition(undefined, true));
+                } else if (focus.#peek().family === TokeFamilies.expression) {
+                    product.content.push(focus.#handleNestedCondition(undefined, true));
+                } else if (focus.#peek().family === TokeFamilies.key) {
+                    product.content.push(focus.#handlePathRun(undefined, true));
+                } else if (focus.#peek().family === TokeFamilies.operator) {
+                    product.content.push(focus.#handleOperator(true));
+                } else {
+                    product.content.push(focus.#handleCopyOver(true));
+                }
+            }
+        }
+
+        if (focus.#peek().type === TokeTypes.startSubquery) {
+            focus.#delete(); // the start
+            handleSubQuery();
+
+            if (focus.#peek().type === TokeTypes.endSubquery) {
+                focus.#delete(); // the end
+            } else {
+                focus.#log.push({
+                    index: focus.#getIndex(focus.#index),
+                    reason: `Subqueries that start with markers '[' must end with them ']'.  Instead, found '${focus.#peek().content}'`
+                });
+            }
+        } else if (focus.#peek().type !== TokeTypes.startSubquery) {
+            handleSubQuery();
+        } else {
+            focus.#log.push({
+                index: focus.#getIndex(focus.#index),
+                reason: `Subqueries must start with markers '[' or nothing (i.e. technically, every query is a subquery that has no neighbor).  Instead, found '${focus.#peek(-1).content}'`
+            });
+        }
+
+        if (focus.error() === false) {
+            while (focus.#peek().type === TokeTypes.objectize || focus.#peek().type === TokeTypes.enumerate) {
+                if (focus.#peek().type === TokeTypes.objectize) {
+                    focus.#delete();
+                    product.postOperation.push({ objectize: true });
+                } else if (focus.#peek().type === TokeTypes.enumerate) {
+                    focus.#delete();
+                    product.postOperation.push({ enumerate: true });
+                }
+            }
+
+            if (product.postOperation.length > 1) {
+                focus.#log.push({
+                    index: focus.#getIndex(focus.#index),
+                    reason: `Subqueries can have only one post operation.  This one has multiples (${product.postOperation.join(',')})`
+                });
+            } else {
+                if (product.postOperation.length === 1) {
+                    product.postOperation = product.postOperation[0];
+                } else {
+                    product.postOperation = { objectize: false, enumerate: false };
+                }
+            }
+        }
+
+        if (inline === false) {
+            focus.#post(product);
+        }
+        return product;
+    }
+
     #handleCondition(precedingOperator, inline = false, that) {
         const focus = (() => {
             return !!this ? this : that
@@ -340,7 +455,7 @@ export class JobjeSTokenizer {
             product.content.push(focus.#delete());
 
             // to support filters, dividers and filters need metadata to help the interpreter handle them properly
-            if (focus.#peek().type === TokeTypes.divider) {                
+            if (focus.#peek().type === TokeTypes.divider) {
                 let div = {
                     ...focus.#delete(),
                     subType: TokenSubTypes.normalDivider
@@ -655,6 +770,10 @@ export class JobjeSTokenizer {
             focus.#peek().family !== TokeFamilies.operator &&
             focus.#peek().type !== TokeTypes.openParenthesis &&
             focus.#peek().type !== TokeTypes.closeParenthesis &&
+            focus.#peek().type !== TokeTypes.startSubquery &&
+            focus.#peek().type !== TokeTypes.endSubquery &&
+            focus.#peek().type !== TokeTypes.objectize &&
+            focus.#peek().type !== TokeTypes.enumerate &&
             ((focus.#peek(1).type !== TokeTypes.divider && focus.#peek(1).type !== TokeTypes.filter) || product.content.length === 0)) {
             if (focus.#peek().family === TokeFamilies.key) {
                 if (focus.#peek(1).type === TokeTypes.function) {
@@ -701,8 +820,13 @@ export class JobjeSTokenizer {
                     break;
                 }
             } else {
-                // if the last toke was a separator, this error message is skipped
-                if (product.content[product.content.length - 1].type !== TokeTypes.separator) {
+                // if the last toke was a separator or the current one is a sequence operator (, or +) or objectizer (>), this error message is skipped
+                if (
+                    product.content[product.content.length - 1].type !== TokeTypes.separator &&
+                    focus.#peek().family !== TokeFamilies.sequencing &&
+                    focus.#peek().type !== TokeTypes.objectize
+                ) {
+
                     focus.#log.push({
                         index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
                         reason: `Path run expected key, parenthetical, or seperator, but got '${focus.#peek().content}'.`
@@ -738,11 +862,14 @@ export class JobjeSTokenizer {
         return product;
     }
 
-    #handleCopyOver() {
+    #handleCopyOver(inline = false) {
         // tokens don't have a family because it isn't needed
         let toke = this.#delete();
         delete toke.family;
 
-        this.#post(toke);
+        if (inline === false) {
+            this.#post(toke);
+        }
+        return toke;
     }
 }

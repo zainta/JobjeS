@@ -8,6 +8,8 @@
     * Functions
 * 1.2.0
     * Filters
+* 1.3.0
+    * Subqueries and post query operators
 
 ## Introduction
 JobjeS is short for JavaScript Object Search.  It is a query language for validating and searching array and object structures within JavaScript.
@@ -17,6 +19,8 @@ To install from NPM, use `npm i jobjes`.
 
 ## Usage
 This library allows regular expression like queries to be executed against an arbitrary array or object literal structure and return any items that match the query.
+
+Queries are broken up into subqueries.  These can be defined explicitly with square brackets (`[` and `]`) or implicitly (they are used behind the scenes anyway).  Multiple queries can be executed in sequence (note that context resets between subqueries) via the sequence operator `,` and merge operator `+`.  The merge operator concatenates results between the merged queries, but otherwise does not modify them.  The sequence operator carries each set as its own array.
  
 There are three key terms in the way queries are executed:
 * Selects:
@@ -79,8 +83,16 @@ Below are the value items within the system:
     * regular expression, checks to see if the given `<key>`'s value matches the regular expression
  
 To connect conditions and parentheticals, operators can be used.  The following operators are supported:
-* `&&` : Ensures that all conditions / parentheticals in the chain evaluate as true.
-* `||` : Ensures that at least one of the conditions / parentheticals in the chain evaluate as true.
+* `&&` : 
+    * Ensures that all conditions / parentheticals in the chain evaluate as true.
+* `||` : 
+    * Ensures that at least one of the conditions / parentheticals in the chain evaluate as true.
+
+Subqueries support post operators.  They are placed immediately following the query itself.  They support the following:
+* `>` :
+    * The `>` post operator maintains the state of object results from queries.  This will, for example, return a clean array of objects from the `*` operator, rather than every object and its properties.
+* `<` :
+    * The `<` post operator enumerates the query results. This, for example, will return an array of the properties in an object literal rather than the object itself.
  
 ## Import Final Note
 When using this system, context is massively important.  If the results you get aren't what you expected, consider context.
@@ -168,7 +180,23 @@ The following queries will result in their specified outcomes:
 ```
 let tests = [];
 
-// below is an example of the new filter functionality.
+// explicit subquery examples
+
+// baseline (to show what you would get without the post operators)
+tests.push(JobjeS.where('[tests.*],[seasons.autumn]', obj));
+tests.push(JobjeS.where('tests.*,seasons', obj));
+tests.push(JobjeS.where('[tests.*],seasons', obj));
+
+// a jobjes call can make multiple queries at once.  below are examples of doing that (along with the post query operators):
+tests.push(JobjeS.where('[tests.*],[seasons]', obj));
+tests.push(JobjeS.where('tests.*<,seasons', obj));
+
+tests.push(JobjeS.where('[tests.*]>,[seasons]<', obj));
+tests.push(JobjeS.where('tests.*>,seasons<', obj));
+
+tests.push(JobjeS.where('tests.*>,[seasons]<', obj));
+
+// below is an example of the filter functionality.
 // result: Test and Test4, either the content of the label field (first example) or the container object (second example)
 tests.push(JobjeS.where('tests.*.label#(\'Test\'||\'Test4\')', obj));
 tests.push(JobjeS.where('tests.*.label:(\'Test\'||\'Test4\')', obj));
