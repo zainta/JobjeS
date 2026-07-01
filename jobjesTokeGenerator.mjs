@@ -13,12 +13,23 @@ export const TokeTypes = {
     openParenthesis: '(',
     closeParenthesis: ')',
 
-    startSubquery: '[', 
+    startSubquery: '[',
     endSubquery: ']',
-    sequence: ',', 
-    mergeSequence: '+', 
+    sequence: ',',
+    mergeSequence: '+',
     objectize: '>',
     enumerate: '<',
+
+    // conversions are self contained blocks that translate instances from one structure to another
+    // in the future, they may support "reverse keying" to allow pulling values from other paths
+    beginConversion: '{',
+    endConversion: '}',
+    inclusiveConversion: '+',  // just inside of the opening curly bracket '{', signals that everything is brought over
+    convertInclude: '+>', // this value will be copied to the destination
+    convertBlock: '->', // this value will not be copied (either inclusively or not)
+    convertIfNotFound: '!>', // this value will be add if the query path returns nothing (query!>query / value,pathrun)
+    convertIfFound: '!!>', // this value will be add if the query path returns a value (query!>query / value,pathrun)
+    convertNotRequired: '-', // when preceding any convert operator, this makes it not a requirement
 
     number: '#',
     value: "value",
@@ -28,6 +39,7 @@ export const TokeTypes = {
     negative: '!',
     logicalAnd: '&&',
     logicalOr: '||',
+    array: '@', // when used in the open, works like 'any', but only for arrays.  in a conversion, places subsequent items in an array
 
     separator: 'separator',
     divider: 'divider',
@@ -50,6 +62,7 @@ export const TokeFamilies = {
     metadata: 'meta',
     sequencing: 'subquery operator',
     key: 'key',
+    conversion: 'conversion related',
 }
 
 /**
@@ -117,6 +130,10 @@ export class JobjeSTokeGenerator {
         while (this.#end() === false && this.#log.length === 0) {
             if (this.#peek(0, this.#separator.length) === this.#separator) {
                 this.#getSeparator();
+            } else if (this.#peek() === '!' && this.#peek(1) === '!' && this.#peek(2) === '>') {
+                this.#getConvertIfFoundOperator();
+            } else if (this.#peek() === '!' && this.#peek(1) === '>') {
+                this.#getConvertIfNotFoundOperator();
             } else if (this.#peek() === '!') {
                 this.#getAlignments(); // ! and !!
             } else if (this.#peek() === '*') {
@@ -125,6 +142,8 @@ export class JobjeSTokeGenerator {
                 this.#getParenthesisBorder(); // ( and )
             } else if (this.#peek() === '[' || this.#peek() === ']') {
                 this.#getSubqueryBorder(); // [ and ]
+            } else if (this.#peek() === '{' || this.#peek() === '}') {
+                this.#getConversionBorder(); // { and }
             } else if (this.#peek(0, this.#divider.length) === this.#divider) {
                 this.#getDivider();
             } else if (this.#peek() === '/' && this.#peek(0, 2) !== '//') {
@@ -135,13 +154,17 @@ export class JobjeSTokeGenerator {
                 this.#getFilter();
             } else if (this.#peek() === ',') {
                 this.#getSequenceMarker();
-            } else if (this.#peek() === '+') {
+            } else if (this.#peek() === '+' && this.#peek(1) !== '>') {
                 this.#getMergeSequenceMarker();
             } else if (this.#peek() === '>') {
                 this.#getObjectizeMarker();
             } else if (this.#peek() === '<') {
                 this.#getArraydicateMarker();
-            } else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
+            } else if (this.#peek() === '+' && this.#peek(1) === '>') {
+                this.#getConvertIncludeOperator();
+            } else if (this.#peek() === '-' && this.#peek(1) === '>') {
+                this.#getConvertBlockOperator();
+            }  else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
                 this.#getBooleans();
             } else if (Number.isInteger(this.#peek())) {
                 this.#getNumbers();
@@ -149,12 +172,24 @@ export class JobjeSTokeGenerator {
                 this.#getValue();
             } else if (this.#peek() === ';') {
                 this.#getFunction();
+            } else if (this.#peek() === '@') {
+                this.#getArray();
+            } else if (this.#peek() === '-') {
+                this.#getConvertNotRequired();
             } else {
                 this.#getKey();
             }
         }
 
         return this;
+    }
+
+    /**
+     * Adds an error to the log object
+     * @param {object} error The error object to add to the log
+     */
+    #logError(error) {
+        this.#log.push(error);
     }
 
     /**
@@ -241,7 +276,7 @@ export class JobjeSTokeGenerator {
                 content: found
             };
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "Excessive !'s found.  Either use 1 (does not exist) or 2 (exists).  Syntax error found.  Check query"
             });
@@ -267,7 +302,7 @@ export class JobjeSTokeGenerator {
                 content: found
             };
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "Excessive *'s found.  Either use 1 (any) or 2 (any at all).  Syntax error found.  Check query"
             });
@@ -302,6 +337,29 @@ export class JobjeSTokeGenerator {
         this.#post(toke);
     }
 
+    #getConversionBorder() {
+        const content = this.#pop();
+
+        let toke = {
+            type: content === '{' ? TokeTypes.beginConversion : TokeTypes.endConversion,
+            family: TokeFamilies.conversion,
+            content: content
+        }
+
+        this.#post(toke);
+
+        // check for the inclusive conversion operator
+        if (this.#peek() === '+' && content === '{') {
+            let opToke = {
+                type: TokeTypes.inclusiveConversion,
+                family: TokeFamilies.conversion,
+                content: this.#pop()
+            }
+
+            this.#post(opToke);
+        }
+    }
+
     #getRegex() {
         let outcome = undefined;
 
@@ -313,7 +371,7 @@ export class JobjeSTokeGenerator {
         if (this.#peek() === '/') {
             this.#delete();
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "'/' expected"
             });
@@ -332,7 +390,7 @@ export class JobjeSTokeGenerator {
         if (this.#peek() === '/') {
             this.#delete();
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "'/' expected"
             });
@@ -346,7 +404,7 @@ export class JobjeSTokeGenerator {
                 content: found
             };
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "Improper regular expression retrieved during query tokenization.  Syntax error detected.  Check query"
             });
@@ -374,7 +432,7 @@ export class JobjeSTokeGenerator {
         }
 
         this.#post(toke);
-    }    
+    }
 
     #getFilter() {
         let toke = {
@@ -411,6 +469,71 @@ export class JobjeSTokeGenerator {
             type: TokeTypes.objectize,
             family: TokeFamilies.metadata,
             content: this.#pop()
+        }
+
+        this.#post(toke);
+    }
+
+    #getConvertIncludeOperator() {
+        this.#pop();
+        this.#pop();
+
+        let toke = {
+            type: TokeTypes.convertInclude,
+            family: TokeFamilies.conversion,
+            content: '+>'
+        }
+
+        this.#post(toke);
+    }
+
+    #getConvertBlockOperator() {
+        this.#pop();
+        this.#pop();
+
+        let toke = {
+            type: TokeTypes.convertBlock,
+            family: TokeFamilies.conversion,
+            content: '->'
+        }
+
+        this.#post(toke);
+    }
+
+    #getConvertIfFoundOperator() {
+        this.#pop();
+        this.#pop();
+        this.#pop();
+
+        let toke = {
+            type: TokeTypes.convertIfFound,
+            family: TokeFamilies.conversion,
+            content: '!!>'
+        }
+
+        this.#post(toke);
+    }
+
+    #getConvertIfNotFoundOperator() {
+        this.#pop();
+        this.#pop();
+
+        let toke = {
+            type: TokeTypes.convertIfNotFound,
+            family: TokeFamilies.conversion,
+            content: '!>'
+        }
+
+        this.#post(toke);
+    }
+
+    #getConvertNotRequired() {
+        this.#pop();
+
+        let toke = {
+            type: TokeTypes.convertNotRequired,
+            family: TokeFamilies.conversion,
+            content: '-'
         }
 
         this.#post(toke);
@@ -487,7 +610,7 @@ export class JobjeSTokeGenerator {
         if (this.#peek() === "'") {
             this.#delete();
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "' expected"
             });
@@ -506,7 +629,7 @@ export class JobjeSTokeGenerator {
         if (this.#peek() === "'") {
             this.#delete();
         } else {
-            this.#log.push({
+            this.#logError({
                 index: oldIndex,
                 reason: "' expected"
             });
@@ -521,7 +644,7 @@ export class JobjeSTokeGenerator {
         if (this.#log.length === 0) {
             this.#post(outcome);
         }
-    }    
+    }
 
     //
     #getFunction() {
@@ -529,6 +652,18 @@ export class JobjeSTokeGenerator {
 
         let toke = {
             type: TokeTypes.function,
+            family: TokeFamilies.key,
+            content: content
+        }
+
+        this.#post(toke);
+    }
+
+    #getArray() {
+        const content = this.#pop();
+
+        let toke = {
+            type: TokeTypes.array,
             family: TokeFamilies.key,
             content: content
         }
@@ -548,7 +683,7 @@ export class JobjeSTokeGenerator {
                 if (this.#peek() === '.' && isNumeric(this.#peek(1)) === false) {
                     break;
                 }
-                
+
                 found = `${found}${this.#delete()}`;
             }
         } else { // otherwise, it has to follow javascript identifier rules (because javascript object)

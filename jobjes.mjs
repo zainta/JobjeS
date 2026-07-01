@@ -1,3 +1,4 @@
+import { relationshipTypes, JobjeSHierarchyMonitor } from './jobjesHierarchyMonitor.mjs';
 import { JobjeSTokenizer, TokenSubTypes, TokenTypes } from './jobjesTokenizer.mjs';
 import { duplicate, isRegex } from './jobjesUtility.mjs';
 
@@ -64,9 +65,11 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *          * : This select matches "any" key.  Meaning, within the structure, { set: [ 1, 2, 3, 4 ], id: 'first' },
  *          the '*' select would match the content of both 'set' and 'id'.
  * 
- *         ** : This select atches "any and all".  It does the same thing as *, but to every possible depth, traversing the entire 
+ *         ** : This select matches "any and all".  It does the same thing as *, but to every possible depth, traversing the entire 
  *          structure and executing subsequent query details against each sub item.  Obviously, this is massively costly in terms of 
  *          relative execution time, especially in large structures.
+ * 
+ *          @ : This select matches "any array" key.  This functions identically to '*' except that it does not match objects.  
  * 
  *   Function : A function call follows the form <key>;<parameter tag>.  A <parameter tag> is a term, 
  *          provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.
@@ -74,6 +77,16 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *          as the left part of a full condition. 
  * 
  *     Filter : A filter is identical to a full condition except that it acts like a select, advancing the context.
+ * 
+ *  Conversion: A conversion is a block, marked by a pair of curly brackets, {}, and populated by conversion operations, that builds an object literal.  What follows is a description of the conversion operations.
+ *              +> : Inclusions follow the pattern [subquery]+>[pathrun], where the subquery retrieves value(s) and they are inserted into the resulting object at the given pathrun location.
+ *              -> : Blocks remove the provided pathrun from the result object literal.  They follow this pattern: [pathrun]->
+ *             !!> : If found operations follow this pattern: [subquery]!!>[subquery] or [value],[pathrun].  They execute the first query, and if they find something, they execute the second query and use the result, or use the literal value, and place it at the pathrun in the resulting object literal.
+ *              !> : If not found operations follow this pattern: [subquery]!>[subquery] or [value],[pathrun].  They execute the first query, and if they do not find something, they execute the second query and use the result, or use the literal value, and place it at the pathrun in the resulting object literal.
+ * 
+ *      Note: Any existing path that contains a single value (number, string, etc) that is updated, will be overwritten.
+ *      Note: By default, all conversion operations are required to succeed for anything to be returned, but they can be made optional by immediately preceding the operator with a dash (-).
+ *      Note: By default, conversions start empty and are filled by the user.  You can, make them "inclusive", i.e., automatically copy all entries that are not accounted for by explicit conversion operations over afterward.  This is done by adding a '+' just inside of the opening curly bracket '{}'.
  * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
@@ -97,7 +110,7 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *      || : Ensures that at least one of the conditions / parentheticals in the chain evaluate as true.
  * 
  *   Subqueries support post operators. (placed immediately following the query itself)  
- *   The support the follow:
+ *   They support the following:
  * 
  *      > :
  *          The '>' post operator maintains the state of object results from queries.  This will, for example, return a clean array of objects from the '*' operator, rather than every object and its properties.
@@ -116,11 +129,19 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * version 1.3.0:
  *      Added subqueries, objectization, and enumeration
  * 
+ * version 1.4.0:
+ *      Added the array select '@' and conversions
+ *      Revamped > and < query operators to be more consistent.  
+ *          Note that they aren't capable of altering context, 
+ *              they only find the closest (immediate or direct parent) object when doing their task
+ * 
  */
 export default class JobjeS {
     static #targetDivider = ':';
     static #pathseparator = '.';
     static #defaultLog = [];
+    static #anchor = undefined; // this is a reference to the root of the structure the query is running against
+    static #monitor = undefined; // used to track the queried object's hierarchy
 
     /**
      * Updates the text used to differentiate the halves of a condition definition.  These characters must be unique within the path, as an unintelligent split is performed against them.
@@ -153,21 +174,65 @@ export default class JobjeS {
     }
 
     static #post(item, set, onEachFound) {
-        if (set.includes(item) === false) {
+        if (this.#contains(set, item) === false) {
             set.push(item);
             if (!!onEachFound && typeof onEachFound === 'function') onEachFound(item);
         }
     }
 
+    // check if an item is contained within an array 
+    // in a manner that catches non-instance based duplicates
+    static #contains(arr, itm) {
+        const strItem = JSON.stringify(itm);
+
+        let found = false;
+        arr.forEach((aItm, index) => {
+            if (JSON.stringify(aItm) === strItem) {
+                found = true;
+            }
+
+            if (found) {
+                return;
+            }
+        });
+
+        return found;
+    }
+
     // merge two arrays without duplicates
     static #merge(set1, set2) {
-        // use JSON.stringify to detect duplicates
-        /* let str1 = set1.map((item) => JSON.stringify(item));
+        // make a stringified version of each
+
+        // note, this will lose functions if they are included, 
+        // so just merging them isn't possible
+        let str1 = set1.map((item) => JSON.stringify(item));
         let str2 = set2.map((item) => JSON.stringify(item));
 
-        return [...(new Set(str1.concat(str2)))].map((item) => JSON.parse(item)); */
+        // instead, iterate through the first one, checking if the second one includes its items
+        // add the ones that aren't duplicated while tracking the ones that are
+        let outcome = [];
+        let dupes = [];
+        str1.forEach((strItem, index) => {
+            if (str2.includes(strItem)) {
+                dupes.push(index);
+            } else {
+                // don't add the stringified version,
+                //  add the original to prevent function loss
+                outcome.push(set1[index]);
+            }
+        });
 
-        return set1.concat(set2);
+        // one the first iteration is completed,
+        // loop through the other array, only adding the non-dupes to the outcome
+        set2.forEach((item, index) => {
+            if (dupes.includes(index) === false) {
+                outcome.push(item);
+            }
+        })
+
+        return outcome;
+
+        /* return set1.concat(set2); */
     }
 
     static #allKeys(subject) {
@@ -198,8 +263,16 @@ export default class JobjeS {
             return [];
 
         let completeResult = [];
-        this.#defaultLog = [];
-        let log = !!externalLog ? externalLog : this.#defaultLog;
+        this.#defaultLog = !!externalLog ? externalLog : [];
+        this.#anchor = subject;
+
+        if (tokenizer.error() === true) {
+            this.#defaultLog = [...this.#defaultLog, ...tokenizer.log()];
+            return [];
+        }
+
+        this.#monitor = new JobjeSHierarchyMonitor(true);
+        this.#monitor.add(subject);
 
         // begin by deriving an array of keys from the subject.
         // These will be the indices in the case of an array.
@@ -210,12 +283,19 @@ export default class JobjeS {
 
         // tokens will contain a list of subqueries
         // this could be only one, but it could be huge, too
-        // loop through them, giving them their each result array, until done
+        // loop through them, giving them each their own result array, until done
         tokens.forEach((sequence, index) => {
             let result = [];
             keys.forEach((key, index) => {
-                this.#resolve(duplicate(sequence.content), subject, key, result, onEachFound, log, sequence.postOperation);
+                this.#resolve(duplicate(sequence.content), subject, key, result, !!sequence.conversion ? undefined : onEachFound, this.#defaultLog, sequence.postOperation);
             });
+
+            // before we sequence, we have to check if the subquery needs to be converted
+            if (!!sequence.conversion) {
+                let conversionResult = [];
+                this.#resolveConversion(sequence.conversion, { convert: result }, "convert", conversionResult, onEachFound, this.#defaultLog, true);
+                result = conversionResult;
+            }
 
             if (!!sequence.sequencer) {
                 switch (sequence.sequencer.type) {
@@ -311,7 +391,10 @@ export default class JobjeS {
                 stepIndex = querySteps.indexOf(nextStep);
                 break;
             case TokenTypes.pathRun:
-                outcome = this.#resolvePathRun(step, container, key, result, onEachFound, log);
+                outcome = this.#resolvePathRun(step, container, key, result, onEachFound, log, postOperation);
+                break;
+            case TokenTypes.conversion:
+                outcome = this.#resolveConversion(step, container, key, result, onEachFound, log);
                 break;
             case TokenTypes.key:
                 if (step.subType === TokenSubTypes.function) {
@@ -348,13 +431,16 @@ export default class JobjeS {
                             log);
                     }
                 } else {
-                    // can the target support further processing?
-                    if (Array.isArray(container[key]) || typeof container[key] === 'object') {
-                        // the outcome from the step will handle select traversal,
-                        // so, all we have to do is run the next step if the need exists
+                    // loop through the work 
+                    //      check to see if the new context target (outcome.matches[i].current) supports further processing
+                    //      (i.e. is an object or array)
+                    //      if yes, then continue, otherwise, the query deadends on that branch
 
-                        // we resolve against each work item in the matches set
-                        for (let i = 0; i < outcome.matches.length; i++) {
+                    // doing it this way allows each step to progress the context in very odd ways that weren't possible before
+                    // this is good.
+
+                    for (let i = 0; i < outcome.matches.length; i++) {
+                        if (Array.isArray(outcome.matches[i].current) || typeof outcome.matches[i].current === 'object') {
                             this.#resolve(
                                 querySteps.slice(stepIndex + 1),
                                 outcome.matches[i].current,
@@ -372,50 +458,81 @@ export default class JobjeS {
                 }
             } else {
                 // this is the end of our search, and our target
-                if (postOperation?.objectize === true) {
+                if (postOperation?.objectize === true && !!outcome.container) {
                     // objectize maintains the object state of items returned,
                     // rather than returning their contents (as is the normal behavior)
                     if (!!outcome.container) {
                         if (Array.isArray(outcome.container)) {
-                            outcome.container.forEach((item, index) => {
-                                this.#post(item, result, onEachFound);
+                            outcome.container.forEach((item) => {
+                                this.#post(
+                                    item,
+                                    result,
+                                    onEachFound
+                                );
                             });
-                        } else if (typeof outcome.container === 'object') {
-                            // single objects are returned as so
-                            this.#post(outcome.container, result, onEachFound);
+                        } else {
+                            this.#post(
+                                outcome.container,
+                                result,
+                                onEachFound
+                            );
                         }
+                    } else {
+                        this.#post(
+                            outcome.container,
+                            result,
+                            onEachFound
+                        );
                     }
                 } else if (postOperation?.enumerate === true) {
-                    // enumeration converts single objects into arrays of their properties' values
-                    // and converts objects in an array in the same manner, but leaves nested arrays alone
-                    let uniqueProcessed = [];
-
-                    // convert each result into a key array
-                    outcome.matches.forEach((subject, index) => {
-                        if (uniqueProcessed.includes(subject.current) === false) {
-                            const expandAndPost = (obj) => {
-                                if (Array.isArray(obj)) {
-                                    this.#post(obj, result, onEachFound);
-                                } else {
-                                    const keys = Object.entries(obj).map((set, index) => set[0]);
-
-                                    this.#post(
-                                        keys.map((key, index) => obj[key]),
-                                        result,
-                                        onEachFound
-                                    );
-                                }
-                            }
-
-                            if (typeof subject.current === 'object') {
-                                expandAndPost(subject.current);
-                            } else if (Array.isArray(subject.current)) {
-                                subject.current.forEach((item, index) => expandAndPost(item));
-                            }
-
-                            uniqueProcessed.push(subject.current);
+                    if (!!outcome.container) {
+                        if (Array.isArray(outcome.container)) {
+                            outcome.container.forEach((item) => {
+                                this.#post(
+                                    item,
+                                    result,
+                                    onEachFound
+                                );
+                            });
+                        } else {
+                            this.#post(
+                                outcome.container,
+                                result,
+                                onEachFound
+                            );
                         }
-                    });
+                    } else {
+                        // enumeration converts single objects into arrays of their properties' values
+                        // and converts objects in an array in the same manner, but leaves nested arrays alone
+                        let uniqueProcessed = [];
+
+                        // convert each result into a key array
+                        outcome.matches.forEach((subject, index) => {
+                            if (uniqueProcessed.includes(subject.current) === false) {
+                                const expandAndPost = (obj) => {
+                                    if (Array.isArray(obj)) {
+                                        this.#post(obj, result, onEachFound);
+                                    } else {
+                                        const keys = Object.entries(obj).map((set, index) => set[0]);
+
+                                        this.#post(
+                                            keys.map((key, index) => obj[key]),
+                                            result,
+                                            onEachFound
+                                        );
+                                    }
+                                }
+
+                                if (typeof subject.current === 'object') {
+                                    expandAndPost(subject.current);
+                                } else if (Array.isArray(subject.current)) {
+                                    subject.current.forEach((item, index) => expandAndPost(item));
+                                }
+
+                                uniqueProcessed.push(subject.current);
+                            }
+                        });
+                    }
                 } else {
                     if (outcome.isSelect !== false || outcome.type === 'nested') {
                         for (let i = 0; i < outcome.matches.length; i++) {
@@ -780,16 +897,86 @@ export default class JobjeS {
      * @param {Array} result The result array.  Populated by endpoint matches
      * @param {function} onEachFound This callback will be executed against each match found within the structure. Single parameter: the object found
      * @param {Array} log The operational log
+     * @param {object} postOperation the post operation to perform, if any
+     * @param {boolean} isRemovalQuery if true, returned matches are container and required deletion properties
      * @returns An object of the form { matched: Boolean, container: *new focus* } 
      */
-    static #resolvePathRun(step, container, key, result, onEachFound, log) {
-        const doStep = (subStep, target, key, results, onEachFound, log) => {
+    static #resolvePathRun(step, container, key, result, onEachFound, log, postOperation, isRemovalQuery) {
+        const doStep = (subStep, target, key, results, onEachFound, log, post) => {
+            // returns the item to put in the outcome.container property
+            const getProperContainer = (container, key, post) => {
+                let result = undefined;
+                const mark = container[key];
+
+                if (post?.objectize === true) {
+                    // if we are objectizing, 
+                    //      and we have only arrays, return the mark
+                    //      ''  we have only objects, return the mark
+                    //      ''  if mark isn't an array, but container is, then return container
+                    //      ''  otherwise return container
+                    if (!!mark) {
+                        if (Array.isArray(mark)) {
+                            if (Array.isArray(container)) {
+                                result = mark;
+                            } else {
+                                result = container;
+                            }
+                        } else if (typeof mark === 'object') {
+                            result = mark;
+                        } else {
+                            result = container;
+                        }
+                    } else {
+                        // if there is no mark then the pathrun fails, 
+                        // so we return nothing technically, but actually return the container
+                        result = container;
+                    }
+                } else if (post?.enumerate === true) {
+                    // if we are enumerating,
+                    //      and we have only arrays, return the mark
+                    //      ''  we have only objects, return the mark's properties as an array
+                    //      ''  if mark is an array, return it
+                    //      ''  if mark isn't an array, but container is, return container
+                    //      ''  otherwise, return mark's enumerated properties
+                    if (!!mark) {
+                        if (Array.isArray(mark)) {
+                            result = mark;
+                        } else if (Array.isArray(container) && Array.isArray(mark) === false) {
+                            result = container;
+                        } else if (typeof mark === 'object') {
+                            result = Object.entries(mark).map((set) => set[1]);
+                        } else {
+                            result = Object.entries(mark).map((set) => set[1]);
+                        }
+                    } else {
+                        // if there is no mark then the pathrun fails, 
+                        // so we return nothing technically, but actually return the container
+                        result = container;
+                    }
+                } else {
+                    // do nothing because this property isn't used normally
+                }
+
+                return result;
+            }
+
             let outcome = {
                 matched: false,
                 container: undefined,
                 keys: [],
                 work: []
             };
+
+            // used by array handles (*, **, and @) to generate their container property content
+            const postOperationContainer = (() => {
+                if (postOperation?.objectize === true) {
+                    // return the entire array, so we get the objects inside
+                    return target;
+                } else {
+                    // default behavior can handle this
+                    return undefined;
+                }
+            })();
 
             if (subStep.type === TokenTypes.key) {
                 if (subStep.subType === TokenSubTypes.positiveKey) {
@@ -799,15 +986,17 @@ export default class JobjeS {
                             (Array.isArray(target[key]) ? target[key].keys() :
                                 []);
 
+                        const work = nextKeys.length === 0 ?
+                            [{ key: key, current: target }] :
+                            nextKeys.map((k, i) => {
+                                return { key: k, current: target[key] }
+                            });
+
                         outcome = {
                             matched: true,
                             keys: nextKeys,
-                            container: target,
-                            work: nextKeys.length === 0 ?
-                                [{ key: key, current: target }] :
-                                nextKeys.map((k, i) => {
-                                    return { key: k, current: target[key] }
-                                })
+                            container: getProperContainer(target, key, post),
+                            work: work
                         };
                     }
                 } else if (subStep.subType === TokenSubTypes.negativeKey) {
@@ -829,70 +1018,113 @@ export default class JobjeS {
                             return matches;
                         })();
 
+                        const work = nextKeys.length === 0 ?
+                            [{ key: key, current: target }] :
+                            nextKeys.map((k, i) => {
+                                return { key: k, current: target[key] }
+                            });
+
                         outcome = {
                             matched: true,
                             keys: nextKeys,
-                            container: target,
-                            work: nextKeys.length === 0 ?
-                                [{ key: key, current: target }] :
-                                nextKeys.map((k, i) => {
-                                    return { key: k, current: target[key] }
-                                })
+                            container: getProperContainer(target, key, post),
+                            work: work
                         };
                     }
                 }
             } else if (subStep.type === TokenTypes.any) {
+                //const resolvedTarget = key === TokenTypes.any ?
+
                 // this always matches, so get all of the keys and continue on each
                 const nextKeys = typeof target[key] === 'object' ?
                     Object.entries(target[key]).map((set, index) => set[0]) :
                     (Array.isArray(target[key]) ? target[key].keys() :
                         []);
 
+                const work = nextKeys.length === 0 ?
+                    [{ key: key, current: target }] :
+                    nextKeys.map((k, i) => {
+                        return { key: k, current: target[key] }
+                    });
+
                 outcome = {
                     matched: true,
                     keys: nextKeys,
-                    container: target,
-                    work: nextKeys.length === 0 ?
-                        [{ key: key, current: target }] :
-                        nextKeys.map((k, i) => {
-                            return { key: k, current: target[key] }
-                        })
+                    container: postOperationContainer,
+                    work: work
                 };
             } else if (subStep.type === TokenTypes.anyAtAll) {
                 // this always matches *everything to any depth*
                 // this means that we recursively iterate through the tree, 
                 //      gather every path node in the structure, and return them as a flat list
                 let allFound = [];
-                const iterationRecursive = (subject, query) => {
+                const iterationRecursive = (subject, all) => {
                     const keys = typeof subject === 'object' ?
                         Object.entries(subject).map((set, index) => set[0]) :
                         (Array.isArray(subject) ? subject.keys() :
                             []);
 
                     keys.forEach((key, index) => {
-                        allFound.push(subject[key]);
+                        all.push({ key: key, location: subject });
 
                         // once this is done, we call the recursive against the subject's children (continuing the down the tree)
-                        iterationRecursive(subject[key]);
+                        iterationRecursive(subject[key], all);
                     });
+
+                    return all;
                 }
 
-                iterationRecursive(target[key]);
+                iterationRecursive(target[key], allFound);
 
-                // allFound should now contain all items that much up to this point.
+                // allFound should now contain all items that match up to this point.
                 // that is what this step returns
                 const nextKeys = allFound;
+                const work = nextKeys.length === 0 ?
+                    [{ key: key, current: target }] :
+                    nextKeys.map((item, i) => {
+                        return { key: item.key, current: item.location }
+                    });
+
+                // now that we have the work items, generate a container for them
+                const properContainer = ((all) => {
+                    let containingArray = [];
+                    all.forEach((item) => {
+                        if (typeof item.location === 'object') {
+                            containingArray = containingArray.concat([item.location]);
+                        }
+                    });
+
+                    return [...new Set(containingArray)];
+                })(iterationRecursive(target, []));
 
                 outcome = {
                     matched: true,
                     keys: nextKeys,
-                    container: target,
-                    work: nextKeys.length === 0 ?
+                    container: post?.enumerate !== true ? properContainer : undefined,
+                    work: work
+                };
+            } else if (subStep.type === TokenTypes.array) {
+                // this always matches any array
+                if (Array.isArray(target)) {
+                    // this always matches, so get all of the keys and continue on each
+                    const nextKeys = typeof target[key] === 'object' ?
+                        Object.entries(target[key]).map((set, index) => set[0]) :
+                        (Array.isArray(target[key]) ? target[key].keys() :
+                            []);
+
+                    const work = nextKeys.length === 0 ?
                         [{ key: key, current: target }] :
                         nextKeys.map((k, i) => {
                             return { key: k, current: target[key] }
-                        })
-                };
+                        });
+
+                    outcome = {
+                        matched: true,
+                        keys: nextKeys,
+                        container: postOperationContainer,
+                        work: work
+                    };
+                }
             }
 
             return outcome;
@@ -928,7 +1160,7 @@ export default class JobjeS {
                     if (subStep.subType === TokenSubTypes.function) {
                         outcome = this.#resolveFunction(subStep, item.current, item.key, responses, onEachFound, log);
                     } else {
-                        outcome = doStep(subStep, item.current, item.key, responses, onEachFound, log);
+                        outcome = doStep(subStep, item.current, item.key, responses, onEachFound, log, postOperation);
                     }
 
                     if (outcome.matched === true) {
@@ -948,6 +1180,40 @@ export default class JobjeS {
                 // we aren't done processing the steps, 
                 // overwrite workSets with resultingWork to give the next step its job details
                 workSets = resultingWork;
+            }
+
+            // if this is a deletion query (remove this property, as opposed to just finding it)
+            // how that is done depends on the type of the final token, and potentially the preceding one
+            if (i >= (step.content.length - 1) && isRemovalQuery) {
+                if (subStep.type === TokenTypes.key) {
+                    // loop through and delete the matching properties
+                    for (let itemIndex = 0; itemIndex < workSets.length; itemIndex++) {
+                        if (workSets[itemIndex].key in workSets[itemIndex].current && workSets[itemIndex].key === subStep.content) {
+                            delete workSets[itemIndex].current[workSets[itemIndex].key];
+                        }
+                    }
+                } else if (subStep.type === TokenTypes.any) {
+                    // loop through and delete all properties
+                    for (let itemIndex = 0; itemIndex < workSets.length; itemIndex++) {
+                        if (workSets[itemIndex].key in workSets[itemIndex].current) {
+                            delete workSets[itemIndex].current[workSets[itemIndex].key];
+                        }
+                    }
+                } else if (subStep.type === TokenTypes.anyAtAll) {
+                    // loop through and delete all properties
+                    for (let itemIndex = 0; itemIndex < workSets.length; itemIndex++) {
+                        if (workSets[itemIndex].key in workSets[itemIndex].current) {
+                            delete workSets[itemIndex].current[workSets[itemIndex].key];
+                        }
+                    }
+                } else if (subStep.type === TokenTypes.array) {
+                    // delete all items
+                    for (let itemIndex = 0; itemIndex < workSets.length; itemIndex++) {
+                        if (workSets[itemIndex].key in workSets[itemIndex].current) {
+                            delete workSets[itemIndex].current[workSets[itemIndex].key];
+                        }
+                    }
+                }
             }
         }
 
@@ -1014,6 +1280,437 @@ export default class JobjeS {
             };
         }
 
+        return outcome;
+    }
+
+    /**
+     * A conversion resolves down to an array of objects or a singular object.  This statement updates the context.
+     * @param {object} step The conversion step to resolve
+     * @param {object | Array} container The current container within the queried structure
+     * @param {String} key The key for comparison to continue the query
+     * @param {Array} result The result array.  Populated by endpoint matches
+     * @param {function} onEachFound This callback will be executed against each match found within the structure. Single parameter: the object found
+     * @param {Array} log The operational log
+     * @param {boolean} isPostOperationConvert If true, this method was called as a post operation for a query.  Otherwise, it is part of the query
+     * @returns An object of the form { matched: Boolean, container: *new focus* } 
+     */
+    static #resolveConversion(step, container, key, result, onEachFound, log, isPostOperationConvert = false) {
+        let outcome = {
+            matched: false,
+            matches: [],
+            work: [],
+        }
+
+        let errors = [];
+
+        // a conversion plan is a listing of what must be done with every property on the object literal
+        const buildConversionPlan = (conversions, inclusive, obj) => {
+            let result = {
+                actions: []
+            }
+
+            // operations are performed in the order delivered, this allows greater control for developers
+            conversions.forEach((op) => {
+                if (op.operation === TokenTypes.convertInclude ||
+                    op.operation === TokenTypes.convertIfFound ||
+                    op.operation === TokenTypes.convertIfNotFound) {
+                    result.actions.push(op);
+                } else if (op.operation === TokenTypes.convertBlock) {
+                    result.actions.push(op);
+                }
+            });
+
+            // if this is inclusive, then create an include for every unmensioned, root-level property
+            // these are appended at the end
+            if (inclusive === true) {
+                const keys = typeof obj === 'object' ?
+                    Object.entries(obj).map((set, index) => set[0]) :
+                    (Array.isArray(obj) ? obj.keys() :
+                        []);
+
+                keys.forEach((property) => {
+                    const match = result.actions.find((op) => {
+                        // make sure this is an immediate path (1 element)
+                        if (op?.source?.content?.length === 1) {
+                            const work = op.source.content;
+
+                            // that one element should be a pathrun with one item in it
+                            if (work[0].type === TokenTypes.pathRun && work[0]?.content?.length === 1) {
+                                const target = work[0]?.content[0];
+
+                                // that one item should be a key
+                                // and for this to match, that key should be our property
+                                if (target.type === TokenTypes.key && target.content === property) {
+                                    return true;
+                                }
+                            }
+                        }
+
+                        return false;
+                    });
+
+                    if (match === undefined) {
+                        let includeOperation = new JobjeSTokenizer({}).Tokenize(`{+${property}>+>${property}}`, this.#targetDivider, this.#pathseparator)[0].content[0].content[0];
+
+                        result.actions.push(includeOperation);
+                    }
+                });
+            }
+
+            return result;
+        }
+
+        // takes a given source and executes the conversions, generating a result object
+        const convert = (source, plan) => {
+            let conversionResult = undefined;
+
+            /**
+             * Takes a pathrun and builds it in conversionResult, creating conversion result if necessary
+             * @param {object} destination Destination should be a pathrun
+             * @returns nothing
+             */
+            const buildPath = (destination, resources) => {
+                // iterate through the destination pathrun and build it in the result instance
+                let current = conversionResult;
+
+                // sets a value in a specific key in the correct target
+                const updateResult = (key, value) => {
+                    if (!!conversionResult) {
+                        if (key in current) {
+                            // if the key exists, only act if they differ (array -> object or visa versa)
+                            if (Array.isArray(current[key]) && typeof value === 'object') {
+                                current[key] = value;
+                            } else if (typeof current[key] === 'object' && Array.isArray(value)) {
+                                current[key] = value;
+                            } else if (['string', 'number', 'undeclaredVariable', 'boolean'].includes(typeof current[key])) {
+                                // this allows values to overwrite previously set cells
+                                current[key] = value;
+                            }
+
+                            // no else, because that means we leave it alone
+                        } else {
+                            current[key] = value;
+                        }
+                        current = current[key];
+                    } else {
+                        conversionResult = {};
+                        conversionResult[key] = value;
+                        current = conversionResult[key];
+                    }
+                }
+
+                for (let destinationStep = 0; destinationStep < destination.content.length; destinationStep++) {
+                    // skip separators
+                    if (destination.content[destinationStep].type === TokenTypes.separator) continue;
+                    const part = destination.content[destinationStep];
+
+                    if (part.type === TokenTypes.key) {
+                        // get the next non-separator step
+                        const nextPart = (() => {
+                            let outcome = undefined;
+
+                            for (let i = destinationStep + 1; i < destination.content.length; i++) {
+                                if (destination.content[i].type !== TokenTypes.separator) {
+                                    outcome = { step: destination.content[i], index: i };
+                                    break;
+                                }
+                            }
+
+                            return outcome;
+                        })();
+
+                        // if the next step is an array declaration, 
+                        //      then make the content of the current key an array.
+                        //      then eat the array declaration.
+                        // otherwise, behave as normal (i.e. make it an object or, if this is the end, make it the provided value(s) in resources)
+                        if (nextPart?.operation?.type === TokenTypes.array) {
+                            destinationStep = nextPart.index;
+
+                            // is this our last step?
+                            if (destinationStep >= (destination.content.length - 1)) {
+                                // yes
+                                updateResult(part.content, [...resources]);
+                            } else {
+                                // no
+                                updateResult(part.content, []);
+                            }
+                        } else {
+                            // is this our last step?
+                            if (destinationStep >= (destination.content.length - 1)) {
+                                // yes
+                                if (resources.length > 0) {
+                                    updateResult(part.content, resources.length === 1 ? resources[0] : resources);
+                                } else {
+                                    //updateResult(part.content, undefined);
+                                }
+                            } else {
+                                // no
+                                updateResult(part.content, {});
+                            }
+                        }
+                    } else {
+                        // bad path
+                        // terminate the loop
+                        if (operation.required === true) {
+                            errors.push({ step: step, substep: operation, reason: `Destination creation process failed.  Unable to process creation directive '${part.content}'.` });
+                        }
+                        return;
+                    }
+                }
+            }
+
+            /**
+             * Executes a provided query against the proper source and returns the result
+             * @param {object} query A query token instance to execute
+             * @param {object} operation The conversion sub-operation the query comes from
+             * @returns The result from the query
+             */
+            const executeQuery = (query, operation) => {
+                // resolve the source
+                let resources = [];
+
+                const sourceQueryTarget = operation.anchored === true ? this.#anchor : source;
+
+                // derive the list of keys.  
+                // this is only necessary if a wildcard is used to start the source query
+                let keys = [query.content[0].content[0].content];
+                if (query.content[0].content[0].type === TokenTypes.any) {
+                    keys = typeof sourceQueryTarget === 'object' ?
+                        Object.entries(sourceQueryTarget).map((set, index) => set[0]) :
+                        (Array.isArray(sourceQueryTarget) ? sourceQueryTarget.keys() :
+                            []);
+                } else if (query.content[0].content[0].type === TokenTypes.array) {
+                    if (Array.isArray(sourceQueryTarget)) {
+                        keys = typeof sourceQueryTarget === 'object' ?
+                            Object.entries(sourceQueryTarget).map((set, index) => set[0]) :
+                            (Array.isArray(sourceQueryTarget) ? sourceQueryTarget.keys() :
+                                []);
+                    } else {
+                        keys = [];
+                    }
+                } else if (query.content[0].content[0].type === TokenTypes.anyAtAll) {
+                    keys = typeof sourceQueryTarget === 'object' ?
+                        Object.entries(sourceQueryTarget).map((set, index) => set[0]) :
+                        (Array.isArray(sourceQueryTarget) ? sourceQueryTarget.keys() :
+                            []);
+                }
+
+                keys.forEach((k) => {
+                    this.#resolve(
+                        query.content,
+                        sourceQueryTarget,
+                        k,
+                        resources,
+                        undefined,
+                        errors,
+                        query.postOperation);
+                });
+
+                return resources;
+            }
+
+            const doInclude = (operation) => {
+                if (errors.length > 0) return;
+
+                const resources = executeQuery(operation.source, operation);
+
+                // ensure that the destination exists and put the resources there
+                if (errors.length === 0) {
+                    buildPath(operation.destination, resources);
+                } else {
+                    if (operation.required === true) {
+                        errors.push({ step: step, substep: operation, reason: 'Source query provided returned errors', errors: [...errors] });
+                    }
+                    return;
+                }
+            }
+
+            const doBlock = (operation) => {
+                // take the each denial and execute it, omitting the final query step, as a query against the target,
+                // this will give the container of the target property
+                // then check for the target property
+                //      if it exists, delete it
+                //      if it does not, the denial fails
+
+                let denialResult = [];
+                let denialLog = [];
+
+                // count back from the end of the pathrun (starting one shy of the end) until we find a non-wildcard key
+                const cutoffIndex = (() => {
+                    let indexResult = -1;
+                    for (let cI = operation.source.content.length - 2; cI > 0; cI--) {
+                        const targetToken = operation.source.content[cI];
+                        if ([TokenTypes.any, TokenTypes.anyAtAll, TokenTypes.array].includes(targetToken.type) === false) {
+                            indexResult = cI;
+                            break;
+                        }
+                    }
+
+                    return indexResult;
+                })();
+
+                // make a modified pathrun that stops one level of depth shy of the end
+                // this is necessary because we want the object that contains the property to delete
+                const deletePath = {
+                    ...operation.source,
+                    content: operation.source.content.slice(0, cutoffIndex)
+                }
+
+                // call a deletion query to remove the target
+                const denialQuery = this.#resolvePathRun(
+                    operation.source,
+                    conversionResult,
+                    operation.source.content[0].content,
+                    denialResult,
+                    undefined,
+                    denialLog,
+                    undefined,
+                    true);
+
+                if (operation.required && denialLog.length > 0) {
+                    errors.push({ step: step, substep: operation, reason: 'Denial source pathrun returned errors', errors: [...denialLog] });
+                }
+            }
+
+            const doFound = (operation, ifYes) => {
+                // "if not found"s follow this format: [query]!>[query] or [value],[pathrun]
+                // the above reads as 
+                //      "if (the inquisition query) does not exist then take (value query/value) and put it here (destination pathrun)"
+                const checkFoundState = (foundCount, wantFound) => {
+                    let outcome = undefined;
+                    if (wantFound === true) {
+                        outcome = foundCount > 0;
+                    } else {
+                        outcome = foundCount === 0;
+                    }
+
+                    return outcome;
+                }
+
+                const resources = executeQuery(operation.inquisition, operation);
+                if (errors.length === 0) {
+                    if (checkFoundState(resources.length, ifYes)) {
+                        // get the value to insert
+                        let insert = undefined;
+                        if (operation.value.type === TokenTypes.subquery) {
+                            insert = executeQuery(operation.value, operation);
+                            if (insert.length === 1) {
+                                insert = insert[0];
+                            } else if (insert.length > 1) {
+                                // explicitly leave it alone, because the array is the content
+                            } else {
+                                insert = undefined;
+                            }
+                        } else {
+                            insert = operation.value.content;
+                        }
+
+                        // now that we have a value to place, build the location and put it there
+                        if (errors.length === 0) {
+                            buildPath(operation.destination, insert);
+                        } else {
+                            if (operation.required === true) {
+                                errors.push({ step: step, substep: operation, reason: 'Value query provided returned errors', errors: [...errors] });
+                            }
+                            return;
+                        }
+                    } else {
+                        if (operation.required === true) {
+                            errors.push({ step: step, substep: operation, reason: 'Inquisition query provided returned items' });
+                        }
+                        return;
+                    }
+                } else {
+                    if (operation.required === true) {
+                        errors.push({ step: step, substep: operation, reason: 'Inquisition query provided returned errors', errors: [...errors] });
+                    }
+                    return;
+                }
+            }
+
+            if (typeof source === 'object') {
+                // iterate through operations and handle them as they come
+                plan.actions.forEach((operation, index) => {
+                    switch (operation.operation) {
+                        case TokenTypes.convertInclude:
+                            doInclude(operation, source, index);
+                            break;
+                        case TokenTypes.convertBlock:
+                            doBlock(operation, source, index);
+                            break;
+                        case TokenTypes.convertIfFound:
+                            doFound(operation, true);
+                            break;
+                        case TokenTypes.convertIfNotFound:
+                            doFound(operation, false);
+                            break;
+                    }
+                });
+            } else {
+                // failure is silent because convertion will encounter things it cannot convert.  
+                // it would likely never succeed if it failed with a shout every time
+                return undefined;
+            }
+
+            if (errors.length === 0) {
+                return conversionResult;
+            } else {
+                return;
+            }
+        }
+
+        //const topic = isPostOperationConvert === true ? container[key] : container[key];
+        const topic = isPostOperationConvert ? container[key] : container;
+        if (!!topic) {
+            if (Array.isArray(topic)) {
+                const convertResults = topic.map((item, index) => {
+                    const plan = buildConversionPlan(step.content, step.inclusive, item);
+                    let conversionResult = convert(item, plan);
+
+                    return conversionResult;
+                });
+
+                convertResults.forEach((item) => {
+                    if (!!item) {
+                        outcome.matches.push(item);
+                    }
+                });
+            } else if (typeof topic === 'object') {
+                const plan = buildConversionPlan(step.content, step.inclusive, topic);
+                let conversionResult = convert(topic, plan);
+
+                if (!!conversionResult) {
+                    outcome.matches.push(conversionResult);
+                }
+            } else {
+                log.push({ 'step': key, 'reason': `Cannot convert value '${topic}'` });
+            }
+        } else {
+            log.push({ 'step': key, 'reason': `Context did not contain key. Context: ${JSON.stringify(container)} key: ${key}` });
+        }
+
+        outcome.matched = errors.length === 0 && outcome.matches.length > 0;
+        if (outcome.matched === true) {
+            if (isPostOperationConvert === true) {
+                outcome.matches.forEach((item) => result.push(item));
+            }
+
+            // generate work items for every property in every match
+            let work = [];
+            outcome.matches.forEach((item) => {
+                const k = "convertResult";
+                let instance = {};
+                instance[k] = item;
+
+                work.push({
+                    key: k,
+                    current: instance
+                });
+            });
+            outcome.matches = work;
+        }
+
+        this.#monitor.add(outcome);
         return outcome;
     }
 

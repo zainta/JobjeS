@@ -101,17 +101,5 @@ const cloneArr = (arr) => {
 
 export function isJSIdentifier(str) {
     // regex from https://codingtechroom.com/question/-javascript-variable-name-regex
-    if (/^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(str)) {
-        const notValid = str in [
-            'abstract', 'arguments', 'async', 'await', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class', 'const', 'continue',
-            'debugger', 'default', 'delete', 'do', 'double', 'else', 'enum', 'eval', 'export', 'extends', 'false', 'final', 'finally', 
-            'float', 'for', 'function', 'goto', 'if', 'implements', 'import', 'in', 'instanceof', 'int', 'interface', 'let', 'long', 'native',
-            'new', 'null', 'package', 'private', 'protected', 'public', 'return', 'short', 'static', 'super', 'switch', 'synchronized', 
-            'this', 'throw', 'throws', 'transient', 'true', 'try', 'typeof', 'using', 'var', 'void', 'volatile', 'while', 'with', 'yield'
-        ];
-
-        return !notValid;
-    }
-
-    return false;
+    return /^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(str);
 }
