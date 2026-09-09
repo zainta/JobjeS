@@ -1,5 +1,5 @@
+import { jobjesLog } from "./jobjesLog.mjs";
 import { JobjeSTokeGenerator, TokeFamilies, TokeTypes } from "./jobjesTokeGenerator.mjs";
-import { duplicate, isJSIdentifier, isRegex } from "./jobjesUtility.mjs";
 
 /*
 Copyright (C) Zain T. Al-Ahmary
@@ -27,6 +27,8 @@ export const TokenTypes = {
     objectize: '>',
     enumerate: '<',
     array: '@',
+    external: '$',
+    parameterItem: 'parameter',
 
     conversion: 'conversion',
     convertInclude: 'convert: include',
@@ -66,21 +68,16 @@ export class JobjeSTokenizer {
     #index;
     #log;
     #parameterDictionary;
+    #mostRecentlyAddedToken;
+    #currentQuery;
 
     /**
      * Create a tokenizer instance
      * @param {object} paramDictionary A dictionary of key->parameter array sets for use with any function calls
      */
-    constructor(paramDictionary) {
+    constructor(paramDictionary, logStorage = []) {
         this.#parameterDictionary = paramDictionary;
-    }
-
-    /**
-     * Returns the tokenization error log from the last attempt
-     * @returns An array containing any errors encountered during tokenization of the provided query
-     */
-    log() {
-        return this.#log;
+        this.#log = new jobjesLog(logStorage);
     }
 
     /**
@@ -96,7 +93,15 @@ export class JobjeSTokenizer {
      * @returns A boolean value representing if there are any errors
      */
     error() {
-        return this.#log.length > 0;
+        return this.#log.count() > 0;
+    }
+
+    /**
+     * Adds an error to the log object
+     * @param {object} error The error object to add to the log
+     */
+    #logError(error) {
+        this.#log.logError(error.reason, undefined, error.index, undefined);
     }
 
     /**
@@ -115,15 +120,11 @@ export class JobjeSTokenizer {
         const toker = new JobjeSTokeGenerator().Tokize(query, divider, separator);
 
         if (toker.error()) {
-            this.#log = [
-                ...toker.log(),
-                { index: -1, reason: 'Toker generated errors.  See previous.' }
-            ];
+            this.#logError({ index: -1, reason: 'Toker generated errors.  See previous.' });
         } else {
             this.#tokens = [];
             this.#work = toker.tokens();
             this.#index = 0;
-            this.#log = [];
 
             // we already have tokes, so we're going to loop through and assemble full tokens for the main class to interpret
             // this will create arrangements that make solving easier, and should make the code simpler in the long run
@@ -135,23 +136,23 @@ export class JobjeSTokenizer {
                     break;
                 } else {
                     // if there is a conversion, it immediately follows the subquery, preceding any sequence operator present (merge or normal)
-                    if (this.#peek().type === TokeTypes.beginConversion) {
+                    /* if (this.#peek().type === TokeTypes.beginConversion) {
                         const conversion = this.#handleConversion(true);
 
                         // the last added token will be the subquery this conversion belongs on
                         this.#tokens[this.#tokens.length - 1].conversion = conversion;
-                    }
+                    } */
 
                     if (this.#peek().type === TokeTypes.sequence) {
-                        this.#delete(); // discard the toke
                         subqueryOperator = {
+                            index: this.#delete().index,
                             type: TokenTypes.sequence,
                             subType: TokenSubTypes.sequencing,
                             content: TokenTypes.sequence
                         };
                     } else if (this.#peek().type === TokeTypes.mergeSequence) {
-                        this.#delete(); // discard the toke
                         subqueryOperator = {
+                            index: this.#delete().index,
                             type: TokenTypes.mergeSequence,
                             subType: TokenSubTypes.sequencing,
                             content: TokenTypes.mergeSequence
@@ -174,39 +175,9 @@ export class JobjeSTokenizer {
     }
 
     /**
-     * Adds an error to the log object
-     * @param {object} error The error object to add to the log
-     */
-    #logError(error) {
-        this.#log.push(error);
-    }
-
-    /**
-     * Calculates the true index value (i.e. character index) and returns it
-     * @param {Number} index The absolute index to start from.  If not provided, defaults to the current this.#index value
-     */
-    #getIndex(index = -1) {
-        const destination = index === -1 ? this.#index : index;
-
-        const set = this.#work.slice(0, destination);
-        let realIndex = 0;
-        for (let i = 0; i < set.length; i++) {
-            realIndex += set[i].content.length;
-
-            if (set[i].type === TokeTypes.regex) {
-                realIndex += 2; // the delimiters
-            } else if (set[i].type === TokeTypes.value) {
-                realIndex += 2; // the delimiters
-            }
-        }
-
-        return realIndex;
-    }
-
-    /**
-     * Retrieves and removes the indicated characters from the #work array
-     * @param {Number} offset The number of characters from the current index to start at
-     * @param {Number} length The number of characters to gather up to
+     * Retrieves and removes the indicated tokes from the #work array
+     * @param {Number} offset The number of tokes from the current index to start at
+     * @param {Number} length The number of tokes to gather up to
      * @returns The resulting string
      */
     #pop(offset = 0, length = 1) {
@@ -216,9 +187,9 @@ export class JobjeSTokenizer {
     }
 
     /**
-     * Retrieves (but doesn't remove) the indicated characters from the #work array
-     * @param {Number} offset The number of characters from the current index to start at
-     * @param {Number} length The number of characters to gather up to
+     * Retrieves (but doesn't remove) the indicated tokes from the #work array
+     * @param {Number} offset The number of tokes from the current index to start at
+     * @param {Number} length The number of tokes to gather up to
      * @returns The resulting string
      */
     #peek(offset = 0, length = 1) {
@@ -227,7 +198,7 @@ export class JobjeSTokenizer {
     }
 
     /**
-     * Increments the index by the given number of characters.  Will not go beyond the end of the array
+     * Increments the index by the given number of tokes.  Will not go beyond the end of the array
      * @param {Number} count 
      */
     #delete(count = 1) {
@@ -237,11 +208,55 @@ export class JobjeSTokenizer {
     }
 
     /**
-     * Adds the token to the internal toke list
-     * @param {object} Toke the toke to add 
+     * Adds the token to the internal list
+     * @param {object} token the toke to add 
      */
     #post(token) {
         this.#tokens.push(token);
+
+        this.#onAddTokenAnywhere(token);
+    }
+
+    /**
+     * Adds a token to an array in a tracked manner
+     * @param {object} parentToken The containing token
+     * @param {Array} contentArray The array to add the token to
+     * @param {object} token The token to add
+     */
+    #contentPush(parentToken, contentArray, token) {
+        contentArray.push(token);
+
+        token.parent = parentToken;
+        // track the addition
+        this.#onAddTokenAnywhere(token);
+    }
+
+    /**
+     * Sets the immediateKey property on the previously added token
+     * @param {object} token The nextly added token
+     */
+    #onAddTokenAnywhere(token) {
+        // only track non-container tokens (tokens that don't indicate the purpose of their contained tokens)
+        // unless they are in a conversion
+        if (Array.isArray(token.content) === false && token.type !== TokenTypes.separator && token?.parent?.type !== TokenTypes.conversion) {
+            if (!!this.#mostRecentlyAddedToken) {
+                this.#mostRecentlyAddedToken.next = token;
+            }
+            this.#mostRecentlyAddedToken = token;
+        } else if (token?.parent?.type === TokenTypes.conversion) {
+            // in the case of conversions, the tokens in it do not come to bear on execution logic
+            // this is because they are executed in a sand box by the conversion operation
+            if (!!this.#mostRecentlyAddedToken) {
+                this.#mostRecentlyAddedToken.next = token;
+            }
+            this.#mostRecentlyAddedToken = token;
+        }
+
+        if (!!this.#currentQuery && this.#currentQuery.first === undefined) {
+            if (!!this.#mostRecentlyAddedToken) {
+                this.#currentQuery.first = this.#mostRecentlyAddedToken;
+            }
+        }
     }
 
     /**
@@ -316,16 +331,18 @@ export class JobjeSTokenizer {
         if (Array.isArray(set) === false) return;
         if (typeof method !== 'function') return;
 
-        const originPoint = this.#index;
+        const originPoint = this.#peek().index;
 
         const result = !!parameters && Array.isArray(parameters) ? method(...parameters, this) : method();
         if (this.error()) {
             this.#logError({
-                index: this.#getIndex(originPoint),
+                index: originPoint,
                 reason: errorMessage
             });
         } else {
             set.push(result);
+
+            /* this.#onAddTokenAnywhere(result); */
         }
     }
 
@@ -333,9 +350,10 @@ export class JobjeSTokenizer {
         const focus = (() => {
             return !!this ? this : that
         })();
-        const origIndex = focus.#index;
+        const origIndex = focus.#peek().index;
 
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.parenthetical,
             subType: TokenSubTypes.none,
             content: []
@@ -346,7 +364,7 @@ export class JobjeSTokenizer {
         if (focus.#peek().type === TokeTypes.openParenthesis) {
             focus.#delete();
 
-            while (focus.#end() === false && focus.#peek().type !== TokeTypes.closeParenthesis) {
+            while (focus.#end() === false && focus.#peek().type !== TokeTypes.closeParenthesis && focus.error() === false) {
                 if (focus.#peek().type === TokeTypes.openParenthesis) {
                     focus.#addTo(
                         product.content,
@@ -387,10 +405,10 @@ export class JobjeSTokenizer {
                     let toke = focus.#delete();
                     delete toke.family;
 
-                    product.content.push(toke);
+                    focus.#contentPush(product, product.content, toke);
                 } else {
                     focus.#logError({
-                        index: focus.#getIndex(focus.#index),
+                        index: focus.#peek().index,
                         reason: `Unexpected toke '${focus.#peek().content}'.`
                     });
                     break;
@@ -401,7 +419,7 @@ export class JobjeSTokenizer {
                 focus.#delete();
             } else {
                 focus.#logError({
-                    index: focus.#getIndex(origIndex),
+                    index: origIndex,
                     reason: `Expected ')', but got '${focus.#peek().content}' instead.`
                 });
             }
@@ -415,7 +433,7 @@ export class JobjeSTokenizer {
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(origIndex),
+                index: origIndex,
                 reason: `Expected '(', but got '${focus.#peek().content}' instead.`
             });
         }
@@ -423,19 +441,21 @@ export class JobjeSTokenizer {
         return outcome;
     }
 
-    #handleSubquery(sequenceOperator, inline = false, hardstopFamily) {
+    #handleSubquery(sequenceOperator, inline = false, hardstopFamily, hardstopType) {
         const focus = (() => {
             return !!this ? this : that
         })();
 
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.subquery,
             subType: TokenSubTypes.none,
             content: [],
             sequencer: sequenceOperator,
-            conversion: undefined,
-            postOperation: []
+            postOperation: [],
+            first: undefined, // used to expediate execution in the case of a query starting with a key
         }
+        this.#currentQuery = product;
 
         const handleSubQuery = () => {
             while (
@@ -445,23 +465,26 @@ export class JobjeSTokenizer {
                 focus.#peek().type !== TokeTypes.mergeSequence &&
                 focus.#peek().type !== TokeTypes.objectize &&
                 focus.#peek().type !== TokeTypes.enumerate &&
-                (focus.#peek().family !== hardstopFamily || hardstopFamily === undefined)
+                (focus.#peek().family !== hardstopFamily || hardstopFamily === undefined) &&
+                (focus.#peek().type !== hardstopType || hardstopType === undefined)
             ) {
 
                 if (focus.#peek().type === TokeTypes.openParenthesis) {
-                    product.content.push(focus.#handleParenthetical(undefined, true));
+                    focus.#contentPush(product, product.content, focus.#handleParenthetical(undefined, true));
                 } else if (focus.#peek(1).type === TokeTypes.divider || focus.#peek(1).type === TokeTypes.filter) {
-                    product.content.push(focus.#handleCondition(undefined, true));
+                    focus.#contentPush(product, product.content, focus.#handleCondition(undefined, true));
                 } else if (focus.#peek().family === TokeFamilies.expression) {
-                    product.content.push(focus.#handleNestedCondition(undefined, true));
+                    focus.#contentPush(product, product.content, focus.#handleNestedCondition(undefined, true));
                 } else if (focus.#peek().family === TokeFamilies.key) {
-                    product.content.push(focus.#handlePathRun(undefined, true));
+                    focus.#contentPush(product, product.content, focus.#handlePathRun(undefined, true));
                 } else if (focus.#peek().family === TokeFamilies.operator) {
-                    product.content.push(focus.#handleOperator(true));
+                    focus.#contentPush(product, product.content, focus.#handleOperator(true));
                 } else if (focus.#peek().type === TokeTypes.beginConversion) {
-                    product.content.push(focus.#handleConversion(true));
+                    focus.#contentPush(product, product.content, focus.#handleConversion(true));
+                } else if (focus.#peek().type === TokeTypes.external) {
+                    focus.#contentPush(product, product.content, focus.#handleExternalFunction(true));
                 } else {
-                    product.content.push(focus.#handleCopyOver(true));
+                    focus.#contentPush(product, product.content, focus.#handleCopyOver(true));
                 }
             }
         }
@@ -474,7 +497,7 @@ export class JobjeSTokenizer {
                 focus.#delete(); // the end
             } else {
                 focus.#logError({
-                    index: focus.#getIndex(focus.#index),
+                    index: focus.#peek().index,
                     reason: `Subqueries that start with markers '[' must end with them ']'.  Instead, found '${focus.#peek().content}'`
                 });
             }
@@ -482,8 +505,8 @@ export class JobjeSTokenizer {
             handleSubQuery();
         } else {
             focus.#logError({
-                index: focus.#getIndex(focus.#index),
-                reason: `Subqueries must start with markers '[' or nothing (i.e. technically, every query is a subquery that has no neighbor).  Instead, found '${focus.#peek(-1).content}'`
+                index: focus.#peek().index,
+                reason: `Subqueries must start with markers '[' or nothing (i.e. technically, every query is a subquery that has no neighbor).  Instead, found '${focus.#peek().content}'`
             });
         }
 
@@ -500,7 +523,7 @@ export class JobjeSTokenizer {
 
             if (product.postOperation.length > 1) {
                 focus.#logError({
-                    index: focus.#getIndex(focus.#index),
+                    index: focus.#peek().index,
                     reason: `Subqueries can have only one post operation.  This one has multiples (${product.postOperation.join(',')})`
                 });
             } else {
@@ -512,6 +535,10 @@ export class JobjeSTokenizer {
             }
         }
 
+        // at the end of every subquery, clear the trackers
+        this.#mostRecentlyAddedToken = undefined;
+        this.#currentQuery = undefined;
+
         if (inline === false) {
             focus.#post(product);
         }
@@ -522,9 +549,10 @@ export class JobjeSTokenizer {
         const focus = (() => {
             return !!this ? this : that
         })();
-        const origIndex = focus.#index;
+        const origIndex = focus.#peek().index;
 
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.condition,
             subType: TokenSubTypes.fullCondition,
             content: []
@@ -533,7 +561,7 @@ export class JobjeSTokenizer {
 
         let outcome = undefined;
         if (focus.#peek().type === TokeTypes.key && (focus.#peek(1).type === TokeTypes.divider || focus.#peek(1).type === TokeTypes.filter)) {
-            product.content.push(focus.#delete());
+            focus.#contentPush(product, product.content, focus.#delete());
 
             // to support filters, dividers and filters need metadata to help the interpreter handle them properly
             if (focus.#peek().type === TokeTypes.divider) {
@@ -541,17 +569,20 @@ export class JobjeSTokenizer {
                     ...focus.#delete(),
                     subType: TokenSubTypes.normalDivider
                 };
-                product.content.push(div);
+                focus.#contentPush(product, product.content, div);
             } else if (focus.#peek().type === TokeTypes.filter) {
                 let div = {
                     ...focus.#delete(),
                     subType: TokenSubTypes.filterDivider
                 };
-                product.content.push(div);
+                focus.#contentPush(product, product.content, div);
             }
 
             while (
-                focus.#end() === false && focus.#peek().family === TokeFamilies.expression && focus.#peek().type !== TokeTypes.closeParenthesis) {
+                focus.#end() === false &&
+                focus.#peek().family === TokeFamilies.expression &&
+                focus.#peek().type !== TokeTypes.closeParenthesis &&
+                focus.error() === false) {
                 if (focus.#peek().type === TokeTypes.openParenthesis) {
                     focus.#addTo(
                         product.content,
@@ -570,7 +601,7 @@ export class JobjeSTokenizer {
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(origIndex),
+                index: origIndex,
                 reason: `Divider expected, but got '${focus.#peek().content}' instead.`
             });
         }
@@ -590,9 +621,10 @@ export class JobjeSTokenizer {
         const focus = (() => {
             return !!this ? this : that
         })();
-        const origIndex = focus.#index;
+        const origIndex = focus.#peek().index;
 
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.condition,
             subType: TokenSubTypes.nestedCondition,
             content: []
@@ -601,7 +633,7 @@ export class JobjeSTokenizer {
 
         let outcome = undefined;
         if (focus.#peek().family === TokeFamilies.expression) {
-            while (focus.#end() === false && focus.#peek().family === TokeFamilies.expression && focus.#peek().type !== TokeTypes.closeParenthesis) {
+            while (focus.#end() === false && focus.error() === false && focus.#peek().family === TokeFamilies.expression && focus.#peek().type !== TokeTypes.closeParenthesis) {
                 if (focus.#peek().type === TokeTypes.openParenthesis) {
                     focus.#addTo(
                         product.content,
@@ -619,20 +651,23 @@ export class JobjeSTokenizer {
 
                         focus.#delete(); // eat the negative notation
                         if (focus.#peek().type === TokeTypes.key) {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.key,
                                 subType: TokenSubTypes.negativeKey,
                                 content: focus.#delete().content // keep the value
                             });
                         } else {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.negativeValue,
                                 subType: TokenSubTypes.none,
                                 content: focus.#delete().content // keep the value
                             });
                         }
                     } else {
-                        product.content.push({
+                        focus.#contentPush(product, product.content, {
+                            index: focus.#peek().index,
                             type: TokenTypes.notexists,
                             subType: TokenSubTypes.none,
                             content: focus.#delete().content
@@ -654,13 +689,15 @@ export class JobjeSTokenizer {
 
                         focus.#delete(); // eat the positive notation
                         if (focus.#peek().type === TokeTypes.key) {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.key,
                                 subType: TokenSubTypes.positiveKey,
                                 content: focus.#delete().content // keep the value
                             });
                         } else {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.positiveValue,
                                 subType: TokenSubTypes.none,
                                 content: focus.#delete().content // keep the value
@@ -673,20 +710,23 @@ export class JobjeSTokenizer {
                         focus.#peek(1).type !== TokeTypes.false &&
                         focus.#peek(1).type !== TokeTypes.key)) {
 
-                        product.content.push({
+                        focus.#contentPush(product, product.content, {
+                            index: focus.#peek().index,
                             type: TokenTypes.exists,
                             subType: TokenSubTypes.none,
                             content: focus.#delete().content
                         });
                     } else {
                         if (focus.#peek().type === TokeTypes.key) {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.key,
                                 subType: TokenSubTypes.positiveKey,
                                 content: focus.#delete().content // keep the value
                             });
                         } else {
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: focus.#peek().index,
                                 type: TokenTypes.positiveValue,
                                 subType: TokenSubTypes.none,
                                 content: focus.#delete().content // keep the value
@@ -694,14 +734,15 @@ export class JobjeSTokenizer {
                         }
                     }
                 } else if (focus.#peek().type === TokeTypes.regex) {
-                    product.content.push({
+                    focus.#contentPush(product, product.content, {
+                        index: focus.#peek().index,
                         type: TokenTypes.regex,
                         subType: TokenSubTypes.none,
                         content: focus.#delete().content
                     });
                 } else {
                     focus.#logError({
-                        index: focus.#getIndex(origIndex),
+                        index: origIndex,
                         reason: `Condition expected, but got '${focus.#peek().content}' instead.`
                     });
                     break;
@@ -709,7 +750,7 @@ export class JobjeSTokenizer {
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(origIndex),
+                index: origIndex,
                 reason: `Condition expected, but got '${focus.#peek().content}' instead.`
             });
         }
@@ -729,13 +770,14 @@ export class JobjeSTokenizer {
         const focus = (() => {
             return !!this ? this : that
         })();
-        const origIndex = focus.#index;
+        const origIndex = focus.#peek().index;
 
         // get the operator and then give it to the next operation so it can be added at the root as the precedingOperator
         const op = focus.#peek().type === TokeTypes.logicalAnd ?
             TokenTypes.and :
             (focus.#peek().type === TokeTypes.logicalOr ? TokenTypes.or : undefined);
         let operator = {
+            index: focus.#peek().index,
             type: op,
             subType: TokenSubTypes.none,
             content: op
@@ -757,13 +799,13 @@ export class JobjeSTokenizer {
                 outcome = focus.#handlePathRun(operator, inline);
             } else {
                 focus.#logError({
-                    index: focus.#getIndex(origIndex),
+                    index: origIndex,
                     reason: `Parenthetical, Condition, Nested Condition, or Condition Path expected, but found '${focus.#peek().content}' instead.`
                 });
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(origIndex),
+                index: origIndex,
                 reason: `Toke is not a logical operator.  Expected '&&' or '||', but got '${focus.#peek().content}' instead.`
             });
         }
@@ -776,9 +818,10 @@ export class JobjeSTokenizer {
             return !!this ? this : that
         })();
 
-        const origIndex = this.#index;
+        const origIndex = focus.#peek().index;
 
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.conversion,
             subType: TokenSubTypes.conversion,
             content: [],
@@ -795,7 +838,7 @@ export class JobjeSTokenizer {
 
             // Note that you cannot nest conversions 
             // (there is no real reason to support this, and it would make things more complex for little benefit, since you'd convert something so you could convert it)
-            while (focus.#end() === false && focus.#peek().type !== TokeTypes.endConversion) {
+            while (focus.#end() === false && focus.#peek().type !== TokeTypes.endConversion && focus.error() === false) {
                 const canSubquery = focus.#upToFirstFamily(TokeFamilies.conversion).length > 0;
                 if (canSubquery === true) {
                     // an anchored source queries from the beginning, as if running fresh, instead of relative to the current context
@@ -845,22 +888,31 @@ export class JobjeSTokenizer {
                         const source = focus.#handleSubquery(undefined, true, TokeFamilies.conversion);
                         let isRequired = true;
 
+                        // track the inclusion operator's starting point for indexing
+                        let inclusionOpIndex = -1;
+
                         // the presence of a negative '-' indicates that this operation is optional, 
                         // meaning it does not have to succeed
                         if (focus.#peek().type === TokeTypes.convertNotRequired) {
-                            focus.#delete();
+                            inclusionOpIndex = focus.#delete().index;
                             isRequired = false;
                         }
 
                         // after the source, in this case, we expect an inclusion operator
                         if (focus.#peek().type === TokeTypes.convertInclude) {
-                            focus.#delete();
+                            // if its not required, the '-' marks the start, otherwise, it starts here
+                            if (inclusionOpIndex === -1) {
+                                inclusionOpIndex = focus.#delete().index;
+                            } else {
+                                focus.#delete();
+                            }
 
                             // next we expect a destination, which should be a path run (since we're going to create it in the target)
                             const destination = focus.#handlePathRun(undefined, true);
 
-                            if (focus.#log.length === 0) {
-                                product.content.push({
+                            if (focus.#log.count() === 0) {
+                                focus.#contentPush(product, product.content, {
+                                    index: inclusionOpIndex,
                                     required: isRequired,
                                     anchored: anchored,
                                     source: source,
@@ -870,7 +922,7 @@ export class JobjeSTokenizer {
                             }
                         } else {
                             focus.#logError({
-                                index: focus.#getIndex(origIndex),
+                                index: origIndex,
                                 reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                             });
                         }
@@ -879,26 +931,35 @@ export class JobjeSTokenizer {
                         const source = this.#handlePathRun(undefined, true);
                         let isRequired = true;
 
+                        // track the block operator's starting point for indexing
+                        let blockOpIndex = -1;
+
                         // the presence of a negative '-' indicates that this operation is optional, 
                         // meaning it does not have to succeed
                         if (focus.#peek().type === TokeTypes.convertNotRequired) {
-                            focus.#delete();
+                            blockOpIndex = focus.#delete().index;
                             isRequired = false;
                         }
 
                         // after the source, in this case, we expect an exclusion operator
                         if (focus.#peek().type === TokeTypes.convertBlock) {
-                            focus.#delete();
+                            // if its not required, the '-' marks the start, otherwise, it starts here
+                            if (blockOpIndex === -1) {
+                                blockOpIndex = focus.#delete().index;
+                            } else {
+                                focus.#delete();
+                            }
 
                             // block does not have a destination, only a target source
-                            product.content.push({
+                            focus.#contentPush(product, product.content, {
+                                index: blockOpIndex,
                                 required: isRequired,
                                 source: source,
                                 operation: TokenTypes.convertBlock
                             });
                         } else {
                             focus.#logError({
-                                index: focus.#getIndex(origIndex),
+                                index: origIndex,
                                 reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                             });
                         }
@@ -910,16 +971,24 @@ export class JobjeSTokenizer {
                         const inquisition = focus.#handleSubquery(undefined, true, TokeFamilies.conversion);
                         let isRequired = true;
 
+                        // track the 'if found' operator's starting point for indexing
+                        let ifFoundIndex = -1;
+
                         // the presence of a negative '-' indicates that this operation is optional, 
                         // meaning it does not have to succeed
                         if (focus.#peek().type === TokeTypes.convertNotRequired) {
-                            focus.#delete();
+                            ifFoundIndex = focus.#delete().index;
                             isRequired = false;
                         }
 
                         // after the inquisition, in this case, we expect an "if found" operator
                         if (focus.#peek().type === TokeTypes.convertIfFound) {
-                            focus.#delete();
+                            // if its not required, the '-' marks the start, otherwise, it starts here
+                            if (ifFoundIndex === -1) {
+                                ifFoundIndex = focus.#delete().index;
+                            } else {
+                                focus.#delete();
+                            }
 
                             // next we expect the value item
                             let value = undefined;
@@ -938,8 +1007,9 @@ export class JobjeSTokenizer {
                                 // next should be a pathrun
                                 const destination = focus.#handlePathRun(undefined, true);
 
-                                if (focus.#log.length === 0) {
-                                    product.content.push({
+                                if (focus.#log.count() === 0) {
+                                    focus.#contentPush(product, product.content, {
+                                        index: ifFoundIndex,
                                         required: isRequired,
                                         anchored: anchored,
                                         inquisition: inquisition,
@@ -950,13 +1020,13 @@ export class JobjeSTokenizer {
                                 }
                             } else {
                                 focus.#logError({
-                                    index: focus.#getIndex(origIndex),
+                                    index: origIndex,
                                     reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                                 });
                             }
                         } else {
                             focus.#logError({
-                                index: focus.#getIndex(origIndex),
+                                index: origIndex,
                                 reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                             });
                         }
@@ -968,16 +1038,24 @@ export class JobjeSTokenizer {
                         const inquisition = focus.#handleSubquery(undefined, true, TokeFamilies.conversion);
                         let isRequired = true;
 
+                        // track the 'if not found' operator's starting point for indexing
+                        let ifNotFoundIndex = -1;
+
                         // the presence of a negative '-' indicates that this operation is optional, 
                         // meaning it does not have to succeed
                         if (focus.#peek().type === TokeTypes.convertNotRequired) {
-                            focus.#delete();
+                            ifNotFoundIndex = focus.#delete().index;
                             isRequired = false;
                         }
 
                         // after the inquisition, in this case, we expect an "if not found" operator
                         if (focus.#peek().type === TokeTypes.convertIfNotFound) {
-                            focus.#delete();
+                            // if its not required, the '-' marks the start, otherwise, it starts here
+                            if (ifNotFoundIndex === -1) {
+                                ifNotFoundIndex = focus.#delete().index;
+                            } else {
+                                focus.#delete();
+                            }
 
                             // next we expect the value item
                             let value = undefined;
@@ -996,8 +1074,9 @@ export class JobjeSTokenizer {
                                 // next should be a pathrun
                                 const destination = focus.#handlePathRun(undefined, true);
 
-                                if (focus.#log.length === 0) {
-                                    product.content.push({
+                                if (focus.#log.count() === 0) {
+                                    focus.#contentPush(product, product.content, {
+                                        index: ifNotFoundIndex,
                                         required: isRequired,
                                         anchored: anchored,
                                         inquisition: inquisition,
@@ -1008,19 +1087,19 @@ export class JobjeSTokenizer {
                                 }
                             } else {
                                 focus.#logError({
-                                    index: focus.#getIndex(origIndex),
+                                    index: origIndex,
                                     reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                                 });
                             }
                         } else {
                             focus.#logError({
-                                index: focus.#getIndex(origIndex),
+                                index: origIndex,
                                 reason: `Conversion operator ${conversionOperatorListing} expected, but got '${focus.#peek().content}' instead.`
                             });
                         }
                     } else {
                         focus.#logError({
-                            index: focus.#getIndex(origIndex),
+                            index: origIndex,
                             reason: `Could not locate conversion operator.  Valid operators are ${conversionOperatorListing}.`
                         });
                     }
@@ -1034,9 +1113,10 @@ export class JobjeSTokenizer {
                     }
                 } else {
                     focus.#logError({
-                        index: focus.#getIndex(origIndex),
+                        index: origIndex,
                         reason: `Source expected, but got '${focus.#peek().content}' instead.`
                     });
+                    break;
                 }
             }
 
@@ -1045,7 +1125,7 @@ export class JobjeSTokenizer {
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(origIndex),
+                index: origIndex,
                 reason: `Conversion statement expected.  Expected '{', but got '${focus.#peek().content}' instead.`
             });
         }
@@ -1065,6 +1145,7 @@ export class JobjeSTokenizer {
         })();
         // a path run is anything from a key to the key preceding a divider or an operator
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.key,
             subType: TokenSubTypes.function,
             content: [],
@@ -1074,11 +1155,11 @@ export class JobjeSTokenizer {
 
         if (focus.#peek().type === TokeTypes.key) {
             // this is the property where the function lives
-            product.content.push(focus.#delete());
+            focus.#contentPush(product, product.content, focus.#delete());
 
             if (focus.#peek().type === TokeTypes.function) {
                 // next should be a semi colon (the function declaration)
-                product.content.push(focus.#delete());
+                focus.#contentPush(product, product.content, focus.#delete());
 
                 // lastly, there should be either a positive value (a reference term for the function parameter dictionary provided),
                 // a separator, indicating this function has no parameters,
@@ -1091,31 +1172,134 @@ export class JobjeSTokenizer {
                         product.parameters = [...focus.#parameterDictionary[focus.#delete().content]];
                     } else {
                         focus.#logError({
-                            index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                            index: focus.#peek().index, // if we got nothing then the index didn't move
                             reason: `Function parameter set key not found in parameter dictionary.`
                         });
                     }
                 } else if ((focus.#peek().type === TokeTypes.separator) || (focus.#peek().type === TokeTypes.divider)) {
                     // this is completion.
-                } else if (focus.#peek()?.length === 0) { 
+                } else if (focus.#peek()?.length === 0) {
                     // because of how it works, when peek finds the end of the token set, it returns an empty array
                     // this means we are done, and is indentical to the above
                 } else {
                     focus.#logError({
-                        index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                        index: focus.#peek().index, // if we got nothing then the index didn't move
                         reason: `Function parameter key or separator expected, but got '${focus.#peek().content}'.`
                     });
                 }
             } else {
                 focus.#logError({
-                    index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
                     reason: `Function declarator (;) expected, but got '${focus.#peek().content}'.`
                 });
             }
         } else {
             focus.#logError({
-                index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                index: focus.#peek().index, // if we got nothing then the index didn't move
                 reason: `Function key expected, but got '${focus.#peek().content}'.`
+            });
+        }
+
+        if (inline === false) {
+            focus.#post(product);
+        }
+        return product;
+    }
+
+    #handleExternalFunction(inline = false, that) {
+        const focus = (() => {
+            return !!this ? this : that
+        })();
+
+        // an external function takes the form $<function name>(<default parameter>,[subquery, subquery, ...])
+        let product = {
+            index: focus.#peek().index,
+            type: TokenTypes.external,
+            subType: TokenSubTypes.none,
+            parameters: [],
+            name: undefined
+        }
+
+        if (focus.#peek().type === TokeTypes.external) {
+            focus.#delete();
+
+            // next should be a key
+            // that key is the name of the function
+            if (focus.#peek().type === TokeTypes.key) {
+                product.name = focus.#delete().content;
+
+                // now, get the parameters
+                // the first two are assumed, these are the third onward, and should be supplied in a comma separated list
+                if (focus.#peek().type === TokeTypes.openParenthesis) {
+                    focus.#delete();
+
+                    // parameters can be parameter tags or anything that resolves into a subquery
+                    while (focus.#end() === false && focus.#peek().type !== TokeTypes.closeParenthesis && focus.error() === false) {
+                        if (focus.#peek().type === TokeTypes.sequence) {
+                            focus.#delete();
+                        }
+
+                        let term = undefined;
+
+                        // if the statement is preceded by a '$' then it is treated as a parameter tag
+                        if (focus.#peek().type === TokeTypes.external) {
+                            focus.#delete();
+
+                            if (focus.#peek().type === TokeTypes.value) {
+                                // if we have a positive value, we have to ensure that the parameters were provided
+                                if (focus.#peek().content in focus.#parameterDictionary) {
+                                    // we have it, store that for use by the interpreter static class
+                                    term = {
+                                        type: TokenTypes.parameterItem,
+                                        parameter: focus.#parameterDictionary[focus.#delete().content]
+                                    };
+                                } else {
+                                    focus.#logError({
+                                        index: focus.#peek().index, // if we got nothing then the index didn't move
+                                        reason: `Function parameter set key not found in parameter dictionary.  Key: '${focus.#peek().content}'. (used with an external function)`
+                                    });
+                                }
+                            } else {
+                                focus.#logError({
+                                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                                    reason: `Parameter tag value expected.`
+                                });
+                            }
+                        } else {
+                            // get the query up until the next closing parenthesis or comma.
+                            term = focus.#handleSubquery(undefined, true, undefined, TokeTypes.closeParenthesis);
+                        }
+
+                        product.parameters.push(term);
+                    }
+
+                    if (focus.error() === false) {
+                        // check for and eat the terminator
+                        if (focus.#peek().type === TokeTypes.closeParenthesis) {
+                            focus.#delete();
+                        } else {
+                            focus.#logError({
+                                index: focus.#peek().index, // if we got nothing then the index didn't move
+                                reason: `External function parameter closing ')' expected.  Got '${focus.#peek().content}'.`
+                            });
+                        }
+                    }
+                } else {
+                    focus.#logError({
+                        index: focus.#peek().index, // if we got nothing then the index didn't move
+                        reason: `External function parameter opening '(' expected.  Got '${focus.#peek().content}'.`
+                    });
+                }
+            } else {
+                focus.#logError({
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                    reason: `After the external opening, the function name is expected.  Got '${focus.#peek().content}'.`
+                });
+            }
+        } else {
+            focus.#logError({
+                index: focus.#peek().index, // if we got nothing then the index didn't move
+                reason: `External opening expect '$', but got '${focus.#peek().content}'.`
             });
         }
 
@@ -1131,6 +1315,7 @@ export class JobjeSTokenizer {
         })();
         // a path run is anything from a key to the key preceding a divider or an operator
         let product = {
+            index: focus.#peek().index,
             type: TokenTypes.pathRun,
             subType: TokenSubTypes.none,
             content: []
@@ -1138,7 +1323,7 @@ export class JobjeSTokenizer {
         if (!!precedingOperator) product.precedingOperator = precedingOperator;
 
         while (
-            focus.#end() === false &&
+            focus.#end() === false && focus.error() === false &&
             focus.#peek().type !== TokeTypes.divider &&
             focus.#peek().family !== TokeFamilies.operator &&
             focus.#peek().type !== TokeTypes.openParenthesis &&
@@ -1174,11 +1359,11 @@ export class JobjeSTokenizer {
                         break;
                     } else {
                         // just a key
-                        product.content.push(func);
+                        focus.#contentPush(product, product.content, func);
                     }
                 } else if (focus.#peek().type === TokeTypes.array) {
-                    focus.#delete();
-                    product.content.push({
+                    focus.#contentPush(product, product.content, {
+                        index: focus.#delete().index,
                         content: '@',
                         type: TokenTypes.array,
                         subType: TokenSubTypes.positiveKey
@@ -1187,7 +1372,7 @@ export class JobjeSTokenizer {
                     let key = focus.#delete();
                     key.subType = TokenSubTypes.positiveKey;
 
-                    product.content.push(key);
+                    focus.#contentPush(product, product.content, key);
                 }
             } else if (focus.#peek().type === TokeTypes.separator) {
                 // conditions are not part of path runs, so only add the separator if a condition does not follow
@@ -1195,7 +1380,7 @@ export class JobjeSTokenizer {
                     let separator = focus.#delete();
                     separator.subType = TokenSubTypes.none;
 
-                    product.content.push(separator);
+                    focus.#contentPush(product, product.content, separator);
                 } else {
                     // if a condition does follow, the path run terminates and does not include the condition
                     break;
@@ -1209,7 +1394,7 @@ export class JobjeSTokenizer {
                 ) {
 
                     focus.#logError({
-                        index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                        index: focus.#peek().index, // if we got nothing then the index didn't move
                         reason: `Path run expected key, parenthetical, or seperator, but got '${focus.#peek().content}'.`
                     });
                 }
@@ -1224,7 +1409,7 @@ export class JobjeSTokenizer {
                 return;
             }
             focus.#logError({
-                index: focus.#getIndex(focus.#index), // if we got nothing then the index didn't move
+                index: focus.#peek().index, // if we got nothing then the index didn't move
                 reason: `Path run expected key, parenthetical, or seperator, but got '${focus.#peek().content}'.`
             });
 

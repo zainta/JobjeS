@@ -99,7 +99,7 @@ const cloneArr = (arr) => {
     return outcome;
 }
 
-export function isJSIdentifier(str) {
-    // regex from https://codingtechroom.com/question/-javascript-variable-name-regex
-    return /^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(str);
+export function isValidKey(str) {
+    // based on regex from https://codingtechroom.com/question/-javascript-variable-name-regex
+    return /^[0-9a-zA-Z_$][0-9a-zA-Z _$]*$/.test(str);
 }

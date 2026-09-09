@@ -18,6 +18,10 @@
   "author": "Zain T. Al-Ahmary",
   "type": "module",
   "main": "jobjes.mjs",
+  "exports": {
+    ".": "./jobjes.mjs",
+    "./instance": "./jobjesInstance.mjs"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   }

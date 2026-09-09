@@ -1,10 +1,14 @@
-import { duplicate, isJSIdentifier, isNumeric, isRegex } from "./jobjesUtility.mjs";
+import { jobjesLog } from "./jobjesLog.mjs";
+import { duplicate, isRegex, isValidKey } from "./jobjesUtility.mjs";
 
 /*
 Copyright (C) Zain T. Al-Ahmary
 
 MIT license.  I am not responsible for how you use or what happens as a result of what you use this for.
 */
+
+// all characters considered whitespace.  these characters are ignored when not in a string.
+const WhitespaceConstant = ' \t\n\r\v';
 
 /**
  * Represents every possible type of tokes  (a toke is a primative token)
@@ -40,6 +44,7 @@ export const TokeTypes = {
     logicalAnd: '&&',
     logicalOr: '||',
     array: '@', // when used in the open, works like 'any', but only for arrays.  in a conversion, places subsequent items in an array
+    external: '$',
 
     separator: 'separator',
     divider: 'divider',
@@ -63,6 +68,7 @@ export const TokeFamilies = {
     sequencing: 'subquery operator',
     key: 'key',
     conversion: 'conversion related',
+    external: 'external',
 }
 
 /**
@@ -78,16 +84,10 @@ export class JobjeSTokeGenerator {
 
     /**
      * Create a tokizer instance
+     * @param {any[]} [logStorage=[]] If provided, sets the array used for log storage
      */
-    constructor() {
-    }
-
-    /**
-     * Returns the tokenization error log from the last attempt
-     * @returns An array containing any errors encountered during tokenization of the provided query
-     */
-    log() {
-        return this.#log;
+    constructor(logStorage = []) {
+        this.#log = new jobjesLog(logStorage);
     }
 
     /**
@@ -103,7 +103,15 @@ export class JobjeSTokeGenerator {
      * @returns A boolean value representing if there are any errors
      */
     error() {
-        return this.#log.length > 0;
+        return this.#log.count() > 0;
+    }
+
+    /**
+     * Adds an error to the log object
+     * @param {object} error The error object to add to the log
+     */
+    #logError(error) {
+        this.#log.logError(error.reason, undefined, error.index, undefined);
     }
 
     /**
@@ -125,9 +133,9 @@ export class JobjeSTokeGenerator {
         this.#tokes = [];
         this.#work = query;
         this.#index = 0;
-        this.#log = [];
+        this.#log.reset();
 
-        while (this.#end() === false && this.#log.length === 0) {
+        while (this.#end() === false && this.#log.count() === 0) {
             if (this.#peek(0, this.#separator.length) === this.#separator) {
                 this.#getSeparator();
             } else if (this.#peek() === '!' && this.#peek(1) === '!' && this.#peek(2) === '>') {
@@ -164,11 +172,11 @@ export class JobjeSTokeGenerator {
                 this.#getConvertIncludeOperator();
             } else if (this.#peek() === '-' && this.#peek(1) === '>') {
                 this.#getConvertBlockOperator();
-            }  else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
+            } else if (this.#peek(0, 4) === 'true' || this.#peek(0, 5) === 'false') {
                 this.#getBooleans();
             } else if (Number.isInteger(this.#peek())) {
                 this.#getNumbers();
-            } else if (this.#peek() === "'") {
+            } else if (['"', "'"].includes(this.#peek())) {
                 this.#getValue();
             } else if (this.#peek() === ';') {
                 this.#getFunction();
@@ -176,20 +184,16 @@ export class JobjeSTokeGenerator {
                 this.#getArray();
             } else if (this.#peek() === '-') {
                 this.#getConvertNotRequired();
+            } else if (this.#peek() === '$') {
+                this.#getExternal();
+            } else if (this.#peek() === '&') {
+                this.#getAnyKey();
             } else {
                 this.#getKey();
             }
         }
 
         return this;
-    }
-
-    /**
-     * Adds an error to the log object
-     * @param {object} error The error object to add to the log
-     */
-    #logError(error) {
-        this.#log.push(error);
     }
 
     /**
@@ -243,6 +247,7 @@ export class JobjeSTokeGenerator {
 
     #getSeparator() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.separator,
             family: TokeFamilies.metadata,
             content: this.#pop(0, this.#separator.length)
@@ -253,6 +258,7 @@ export class JobjeSTokeGenerator {
 
     #getDivider() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.divider,
             family: TokeFamilies.metadata,
             content: this.#pop(0, this.#divider.length)
@@ -271,6 +277,7 @@ export class JobjeSTokeGenerator {
 
         if (found.length > 0 && found.length < 3) {
             outcome = {
+                index: oldIndex,
                 type: found.length === 1 ? TokeTypes.negative : TokeTypes.positive,
                 family: TokeFamilies.expression,
                 content: found
@@ -282,7 +289,7 @@ export class JobjeSTokeGenerator {
             });
         }
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
@@ -297,6 +304,7 @@ export class JobjeSTokeGenerator {
 
         if (found.length > 0 && found.length < 3) {
             outcome = {
+                index: oldIndex,
                 type: found.length === 1 ? TokeTypes.any : TokeTypes.anyAtAll,
                 family: TokeFamilies.key,
                 content: found
@@ -308,15 +316,17 @@ export class JobjeSTokeGenerator {
             });
         }
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
 
     #getParenthesisBorder() {
+        const oldIndex = this.#index;
         const content = this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: content === '(' ? TokeTypes.openParenthesis : TokeTypes.closeParenthesis,
             family: TokeFamilies.expression,
             content: content
@@ -326,9 +336,11 @@ export class JobjeSTokeGenerator {
     }
 
     #getSubqueryBorder() {
+        const oldIndex = this.#index;
         const content = this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: content === '[' ? TokeTypes.startSubquery : TokeTypes.endSubquery,
             family: TokeFamilies.key,
             content: content
@@ -338,9 +350,11 @@ export class JobjeSTokeGenerator {
     }
 
     #getConversionBorder() {
+        const oldIndex = this.#index;
         const content = this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: content === '{' ? TokeTypes.beginConversion : TokeTypes.endConversion,
             family: TokeFamilies.conversion,
             content: content
@@ -351,6 +365,7 @@ export class JobjeSTokeGenerator {
         // check for the inclusive conversion operator
         if (this.#peek() === '+' && content === '{') {
             let opToke = {
+                index: this.#index,
                 type: TokeTypes.inclusiveConversion,
                 family: TokeFamilies.conversion,
                 content: this.#pop()
@@ -399,6 +414,7 @@ export class JobjeSTokeGenerator {
 
         if (isRegex(found)) {
             outcome = {
+                index: oldIndex,
                 type: TokeTypes.regex,
                 family: TokeFamilies.expression,
                 content: found
@@ -410,7 +426,7 @@ export class JobjeSTokeGenerator {
             });
         }
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
@@ -419,12 +435,14 @@ export class JobjeSTokeGenerator {
         let toke = undefined;
         if (this.#work.indexOf('&&', this.#index) === this.#index) {
             toke = {
+                index: this.#index,
                 type: TokeTypes.logicalAnd,
                 family: TokeFamilies.operator,
                 content: this.#delete(2)
             };
         } else if (this.#work.indexOf('||', this.#index) === this.#index) {
             toke = {
+                index: this.#index,
                 type: TokeTypes.logicalOr,
                 family: TokeFamilies.operator,
                 content: this.#delete(2)
@@ -436,6 +454,7 @@ export class JobjeSTokeGenerator {
 
     #getFilter() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.filter,
             family: TokeFamilies.metadata,
             content: this.#pop()
@@ -446,6 +465,7 @@ export class JobjeSTokeGenerator {
 
     #getSequenceMarker() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.sequence,
             family: TokeFamilies.sequencing,
             content: this.#pop()
@@ -456,6 +476,7 @@ export class JobjeSTokeGenerator {
 
     #getMergeSequenceMarker() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.mergeSequence,
             family: TokeFamilies.sequencing,
             content: this.#pop()
@@ -466,6 +487,7 @@ export class JobjeSTokeGenerator {
 
     #getObjectizeMarker() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.objectize,
             family: TokeFamilies.metadata,
             content: this.#pop()
@@ -475,10 +497,12 @@ export class JobjeSTokeGenerator {
     }
 
     #getConvertIncludeOperator() {
+        const oldIndex = this.#index;
         this.#pop();
         this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.convertInclude,
             family: TokeFamilies.conversion,
             content: '+>'
@@ -488,10 +512,12 @@ export class JobjeSTokeGenerator {
     }
 
     #getConvertBlockOperator() {
+        const oldIndex = this.#index;
         this.#pop();
         this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.convertBlock,
             family: TokeFamilies.conversion,
             content: '->'
@@ -501,11 +527,13 @@ export class JobjeSTokeGenerator {
     }
 
     #getConvertIfFoundOperator() {
+        const oldIndex = this.#index;
         this.#pop();
         this.#pop();
         this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.convertIfFound,
             family: TokeFamilies.conversion,
             content: '!!>'
@@ -515,10 +543,12 @@ export class JobjeSTokeGenerator {
     }
 
     #getConvertIfNotFoundOperator() {
+        const oldIndex = this.#index;
         this.#pop();
         this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.convertIfNotFound,
             family: TokeFamilies.conversion,
             content: '!>'
@@ -528,9 +558,11 @@ export class JobjeSTokeGenerator {
     }
 
     #getConvertNotRequired() {
+        const oldIndex = this.#index;
         this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.convertNotRequired,
             family: TokeFamilies.conversion,
             content: '-'
@@ -539,8 +571,23 @@ export class JobjeSTokeGenerator {
         this.#post(toke);
     }
 
+    #getExternal() {
+        const oldIndex = this.#index;
+        this.#pop();
+
+        let toke = {
+            index: oldIndex,
+            type: TokeTypes.external,
+            family: TokeFamilies.external,
+            content: '$'
+        }
+
+        this.#post(toke);
+    }
+
     #getArraydicateMarker() {
         let toke = {
+            index: this.#index,
             type: TokeTypes.enumerate,
             family: TokeFamilies.metadata,
             content: this.#pop()
@@ -553,12 +600,14 @@ export class JobjeSTokeGenerator {
         let toke = undefined;
         if (this.#work.indexOf('true', this.#index) === this.#index) {
             toke = {
+                index: this.#index,
                 type: TokeTypes.true,
                 family: TokeFamilies.expression,
                 content: Boolean(this.#delete(4))
             };
         } else if (this.#work.indexOf('false', this.#index) === this.#index) {
             toke = {
+                index: this.#index,
                 type: TokeTypes.false,
                 family: TokeFamilies.expression,
                 content: Boolean(this.#delete(5))
@@ -589,12 +638,13 @@ export class JobjeSTokeGenerator {
         }
 
         outcome = {
+            index: oldIndex,
             type: TokeTypes.number,
             family: TokeFamilies.expression,
             content: Number(found)
         }
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
@@ -603,22 +653,23 @@ export class JobjeSTokeGenerator {
         let outcome = undefined;
 
         // values are denoted by quotes (')
+        const delimiter = this.#peek();
         const oldIndex = this.#index;
         let found = '';
 
-        // opening delimiter
-        if (this.#peek() === "'") {
+        // opening delimiter (can be either, but the last one has to match it)
+        if (['"', "'"].includes(this.#peek())) {
             this.#delete();
         } else {
             this.#logError({
                 index: oldIndex,
-                reason: "' expected"
+                reason: "' or \" expected"
             });
             return;
         }
 
-        while (this.#peek() !== "'" && this.#end() === false) {
-            if (this.#peek() === '\\' && this.#peek(1) === "'") {
+        while (this.#peek() !== delimiter && this.#end() === false) {
+            if (this.#peek() === '\\' && this.#peek(1) === delimiter) {
                 found = `${found}${this.#delete(2)}`;
             } else {
                 found = `${found}${this.#delete()}`;
@@ -626,31 +677,34 @@ export class JobjeSTokeGenerator {
         }
 
         // trailing delimiter
-        if (this.#peek() === "'") {
+        if (this.#peek() === delimiter) {
             this.#delete();
         } else {
             this.#logError({
                 index: oldIndex,
-                reason: "' expected"
+                reason: "' or \" expected"
             });
             return;
         }
         outcome = {
+            index: oldIndex,
             type: TokeTypes.value,
             family: TokeFamilies.expression,
             content: found
         };
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
 
     //
     #getFunction() {
+        const oldIndex = this.#index;
         const content = this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.function,
             family: TokeFamilies.key,
             content: content
@@ -660,9 +714,11 @@ export class JobjeSTokeGenerator {
     }
 
     #getArray() {
+        const oldIndex = this.#index;
         const content = this.#pop();
 
         let toke = {
+            index: oldIndex,
             type: TokeTypes.array,
             family: TokeFamilies.key,
             content: content
@@ -673,33 +729,94 @@ export class JobjeSTokeGenerator {
 
     // any text is an item, these will eventually become values and keys
     #getKey() {
-        let outcome;
+        let outcome = {
+            index: this.#index,
+            type: TokeTypes.key,
+            family: TokeFamilies.key,
+            content: undefined
+        }
+        let found = '';
+        let containsWhitespace = false;
+
+        // loop through and go until we find the end or another separator
+        while (this.#end() === false && this.#peek() !== this.#separator) {
+            if (isValidKey(`${found}${this.#peek()}`) === true) {
+                const ch = this.#delete();
+                found = `${found}${ch}`;
+                containsWhitespace = containsWhitespace === true || WhitespaceConstant.indexOf(ch) > -1;
+            } else {
+                break;
+            }
+        }
+
+        // it is possible to enter a situation where a key is expected, but there is none because it was just some whitespace
+        // if that is the case, found will be empty and the next #peek will be whitespace
+        if (found === '' && WhitespaceConstant.indexOf(this.#peek()) > -1) {
+            // eat all of the whitespace
+            while (WhitespaceConstant.indexOf(this.#peek()) > -1) {
+                this.#delete();
+            }
+
+            return;
+        } else {
+            // now check what we got
+            outcome.content = found;
+
+            if (this.#log.count() === 0) {
+                this.#post(outcome);
+            }
+        }
+    }
+
+    #getAnyKey() {
+        // an "any" key is a key that can be in any format.
+        // for example "  gks.2ol!" isn't possible with a non-denoted key
+        // any keys are denoted with the & symbol, like so &  gks.2ol!&
+
+        let outcome = undefined;
+
+        // denoted keys are marked by ampersands (&)
+        const delimiter = this.#peek();
         const oldIndex = this.#index;
         let found = '';
 
-        // array indexes are keys, so if it starts with a raw number (no quotes) then its an array index
-        if (isNumeric(this.#peek())) {
-            while (isNumeric(`${found}${this.#peek()}`) === true && this.#end() === false) {
-                if (this.#peek() === '.' && isNumeric(this.#peek(1)) === false) {
-                    break;
-                }
+        // opening delimiter (can be either, but the last one has to match it)
+        if (['&'].includes(this.#peek())) {
+            this.#delete();
+        } else {
+            this.#logError({
+                index: oldIndex,
+                reason: "& expected"
+            });
+            return;
+        }
 
-                found = `${found}${this.#delete()}`;
-            }
-        } else { // otherwise, it has to follow javascript identifier rules (because javascript object)
-            while (isJSIdentifier(`${found}${this.#peek()}`) === true && this.#end() === false) {
+        while (this.#peek() !== delimiter && this.#end() === false) {
+            if (this.#peek() === '\\' && this.#peek(1) === delimiter) {
+                found = `${found}${this.#delete(2)}`;
+            } else {
                 found = `${found}${this.#delete()}`;
             }
         }
 
-
+        // trailing delimiter
+        if (this.#peek() === delimiter) {
+            this.#delete();
+        } else {
+            this.#logError({
+                index: oldIndex,
+                reason: "& expected"
+            });
+            return;
+        }
         outcome = {
+            index: oldIndex,
             type: TokeTypes.key,
             family: TokeFamilies.key,
             content: found
         };
 
-        if (this.#log.length === 0) {
+        if (this.#log.count() === 0) {
             this.#post(outcome);
         }
     }
