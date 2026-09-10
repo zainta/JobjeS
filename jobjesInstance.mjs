@@ -111,6 +111,9 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *                  e.g. $count('this is a query', $'this is a literal')
  *          External functions can return an object literal, array, or scalar value.  They change context, and thus count as selects.
  * 
+ *      `..`:
+ *          The ancestor operator (two separators next to each other), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  
+ * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
  *          simply remove the key and divider (default ':').
@@ -173,6 +176,10 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *          Namespaces:
  *              Static object 'JobjeS' is in namespace 'jobjes'
  *              Instance object 'JobjeSInstance' is in namespace 'jobjes/instance'
+ * 
+ *  version 1.6.0:
+ *      Fixed a bug in pathrun resolution that could clear the query results
+ *      Added the ancestor operator (two separators side by side, '..' by default) to allow navigation in the opposite direction in the structure.
  */
 export default class JobjeSInstance {
     #targetDivider = ':';
@@ -1289,6 +1296,11 @@ export default class JobjeSInstance {
                 if (i < (step.content.length - 1)) {
                     continue;
                 }
+            } else if (subStep.type === TokenTypes.invertedSeparator) {
+                // inverted separators reverse progress along the current path by one item
+                const ancestor = this.#tracker.ancestor(workSets[0]);
+                resultingWork.push(ancestor);
+                currentResult = addResult(currentResult, ancestor, false);
             } else {
                 let responses = [];
                 // each successive step in the pathrun further filters the previous step's items
@@ -1315,8 +1327,6 @@ export default class JobjeSInstance {
                             resultingWork.push(outcome.target);
                             currentResult = addResult(currentResult, outcome.target, outcome.isMultiResult === false);
                         }
-                    } else {
-                        currentResult = undefined;
                     }
                 });
             }
@@ -1635,8 +1645,8 @@ export default class JobjeSInstance {
 
                             return this.#anchor;
                         } else {
-                            return source;    
-                        }                                                
+                            return source;
+                        }
                     } else {
                         return source;
                     }

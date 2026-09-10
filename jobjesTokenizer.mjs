@@ -12,6 +12,7 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  */
 export const TokenTypes = {
     separator: 'separator',
+    invertedSeparator: 'inverted separator',
     divider: 'divider',
     filter: 'filter',
     regex: 'regex', // a regular expression

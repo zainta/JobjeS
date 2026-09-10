@@ -47,6 +47,7 @@ export const TokeTypes = {
     external: '$',
 
     separator: 'separator',
+    invertedSeparator: 'inverted separator',
     divider: 'divider',
     filter: 'filter', // a filter turns a full condition into a select, and is defined with # replacing the normal divider  (e.g. <key>#<value>)
 
@@ -137,7 +138,7 @@ export class JobjeSTokeGenerator {
 
         while (this.#end() === false && this.#log.count() === 0) {
             if (this.#peek(0, this.#separator.length) === this.#separator) {
-                this.#getSeparator();
+                this.#getSeparators();
             } else if (this.#peek() === '!' && this.#peek(1) === '!' && this.#peek(2) === '>') {
                 this.#getConvertIfFoundOperator();
             } else if (this.#peek() === '!' && this.#peek(1) === '>') {
@@ -245,12 +246,30 @@ export class JobjeSTokeGenerator {
         return this.#index >= this.#work.length;
     }
 
-    #getSeparator() {
-        let toke = {
-            index: this.#index,
-            type: TokeTypes.separator,
-            family: TokeFamilies.metadata,
-            content: this.#pop(0, this.#separator.length)
+    #getSeparators() {
+        let toke;
+
+        if (this.#peek(0, this.#separator.length) === this.#separator) {
+            if (this.#peek(this.#separator.length, this.#separator.length) === this.#separator) {
+                toke = {
+                    index: this.#index,
+                    type: TokeTypes.invertedSeparator,
+                    family: TokeFamilies.key,
+                    content: this.#pop(0, this.#separator.length * 2)
+                }
+            } else {
+                toke = {
+                    index: this.#index,
+                    type: TokeTypes.separator,
+                    family: TokeFamilies.metadata,
+                    content: this.#pop(0, this.#separator.length)
+                }
+            }
+        } else {
+            this.#logError({
+                index: this.#index,
+                reason: `Separator or inverted separator expected. '${this.#separator}' or '${this.#separator}${this.#separator}' `
+            });
         }
 
         this.#post(toke);

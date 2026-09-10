@@ -33,6 +33,9 @@
         * Namespaces:
             * Static object `JobjeS` is in namespace `jobjes`.
             * Instance object `JobjeSInstance` is in namespace `jobjes/instance`.
+* version 1.6.0:
+    * Fixed a bug in pathrun resolution that could clear the query results
+    * Added the ancestor operator (two separators side by side, '..' by default) to allow navigation in the opposite direction in the structure.
 
 ## Introduction
 JobjeS is short for JavaScript Object Search.  It is a query language for validating and searching array and object structures within JavaScript.
@@ -122,6 +125,9 @@ Below are the selects within the system:
             * Note: to provide literals to an external function, precede them with a `$`.  This will make the value immediately following count as a `<parameter tag>`, like those used for functions (see above).  Also reference Function Examples in the example code.
             * e.g. `$count('this is a query', $'this is a literal')`
     * External functions can return an object literal, array, or scalar value.  They change context, and thus count as selects.
+
+* `..`:
+    * The ancestor operator (two separators next to each other - `..` by default), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  See examples below.
 
 Below are the value items within the system:
 * Note that all definitions below are full conditions.  To convert them into nested conditions, simply remove the key and divider (default ':').
@@ -620,6 +626,23 @@ const log = (testName, toConsole = consoleOutput) => {
     let i = 0;
 }
 
+// inverted separators
+{
+    // convension
+    const inverted1 = JobjeS.where('tests.@.projects.(duration."two weeks")', obj, undefined, testErrorLog);
+    if (JSON.stringify(inverted1) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
+        log("inverted1");
+    }
+
+    // inversion
+    const inverted2 = JobjeS.where('tests.@.projects.duration."two weeks"..', obj, undefined, testErrorLog);
+    if (JSON.stringify(inverted2) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
+        log("inverted2");
+    }
+
+    let i = 0;
+}
+
 if (testErrors.length > 0) {
     throw new Error(`Errors were encountered during testing: ${testErrors.join(", ")}`);
 }
@@ -955,6 +978,23 @@ const log = (testName, toConsole = consoleOutput) => {
     const appendation = customFunctionExample.where('awning listing.light.$append($"forgottenClient")', obj);    
     if (JSON.stringify(appendation) !== '[{"manufacturer":"Rawshank Builders","size":"medium","weight":"100kg"},{"manufacturer":"Lawshank Incorporated","size":"small","weight":"40kg"},{"manufacturer":"Complete Solutions Inc.","size":"small","weight":"62kg"},{"manufacturer":"Ted Industries","size":"tiny","weight":"100kg"}]') {
         log("appendation");
+    }
+
+    let i = 0;
+}
+
+// inverted separators
+{
+    // convension
+    const inverted1 = JobjeS.where('tests.@.projects.(duration."two weeks")', obj, undefined, testErrorLog);
+    if (JSON.stringify(inverted1) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
+        log("inverted1");
+    }
+
+    // inversion
+    const inverted2 = JobjeS.where('tests.@.projects.duration."two weeks"..', obj, undefined, testErrorLog);
+    if (JSON.stringify(inverted2) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
+        log("inverted2");
     }
 
     let i = 0;
