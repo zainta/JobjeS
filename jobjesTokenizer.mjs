@@ -19,6 +19,20 @@ export const TokenTypes = {
     key: 'key',  // a piece of text meant to represent a property name
     subquery: 'subquery',
 
+    // very context sensitive:
+    //      >>[key] means store in variable [key]
+    //      >>+[key] means add the item to the variable (this ensures the variable will be an array at the root)
+    //      <<[key] means retrieve value from variable [key]
+    //      << means retrieve all stored values as an array
+    //      >>-[key] means delete given variable from store and discard value
+    //      <<-[key] means delete given variable and change context to value (extract)
+    intoStore: 'intoStore', // store context
+    pushStore: 'pushStore', // add to stored content
+    fromStore: 'fromStore', // replace context from store
+    getStore: 'getStore', // retrieve entire store
+    discardStore: 'discardStore', // delete store, discard context
+    extractStore: 'extractStore', // delete store, keep context
+
     exists: '!!', // !!
     notexists: '!', // !
     any: '*', // *
@@ -58,6 +72,7 @@ export const TokenSubTypes = {
     function: "function", // a function call (of the form: <key>;<parameter bundle name>)
     sequencing: 'subquery operator', // used to connect subqueries
     conversion: 'conversion',
+    variableStore: 'variable store',
 }
 
 /**
@@ -484,6 +499,8 @@ export class JobjeSTokenizer {
                     focus.#contentPush(product, product.content, focus.#handleConversion(true));
                 } else if (focus.#peek().type === TokeTypes.external) {
                     focus.#contentPush(product, product.content, focus.#handleExternalFunction(true));
+                } else if (focus.#peek().family === TokeFamilies.variableStore) {
+                    focus.#contentPush(product, product.content, focus.#handleVariableStore(true));
                 } else {
                     focus.#contentPush(product, product.content, focus.#handleCopyOver(true));
                 }
@@ -1310,6 +1327,83 @@ export class JobjeSTokenizer {
         return product;
     }
 
+    #handleVariableStore(inline = false, that) {
+        const focus = (() => {
+            return !!this ? this : that
+        })();
+        // a path run is anything from a key to the key preceding a divider or an operator
+        let product = {
+            index: focus.#peek().index,
+            type: undefined,
+            subType: TokenSubTypes.variableStore,
+            content: []
+        }
+
+        if (focus.#peek().type === TokeTypes.store) { // >>
+            focus.#delete();
+            if (focus.#peek().type === TokeTypes.key) {
+                product.type = TokenTypes.intoStore;
+                product.content.push(focus.#delete());
+            } else {
+                focus.#logError({
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                    reason: `Store expected key toke.  Got '${focus.#peek().content}'.`
+                });
+            }
+        } else if (focus.#peek().type === TokeTypes.pushStore) { // >>+
+            focus.#delete();
+            if (focus.#peek().type === TokeTypes.key) {
+                product.type = TokenTypes.pushStore;
+                product.content.push(focus.#delete());
+            } else {
+                focus.#logError({
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                    reason: `Store addition expected key toke.  Got '${focus.#peek().content}'.`
+                });
+            }
+        } else if (focus.#peek().type === TokeTypes.retrieveStore) { // <<
+            focus.#delete();
+            if (focus.#peek().type === TokeTypes.key) { // <<[key]
+                product.type = TokenTypes.fromStore;
+                product.content.push(focus.#delete());
+            } else { // <<
+                product.type = TokenTypes.getStore;
+            }
+        } else if (focus.#peek().type === TokeTypes.discardStore) { // >>-
+            focus.#delete();
+            if (focus.#peek().type === TokeTypes.key) {
+                product.type = TokenTypes.discardStore;
+                product.content.push(focus.#delete());
+            } else {
+                focus.#logError({
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                    reason: `Store discard expected key toke.  Got '${focus.#peek().content}'.`
+                });
+            }
+        } else if (focus.#peek().type === TokeTypes.extractStore) { // <<-
+            focus.#delete();
+            if (focus.#peek().type === TokeTypes.key) {
+                product.type = TokenTypes.extractStore;
+                product.content.push(focus.#delete());
+            } else {
+                focus.#logError({
+                    index: focus.#peek().index, // if we got nothing then the index didn't move
+                    reason: `Store extract expected key toke.  Got '${focus.#peek().content}'.`
+                });
+            }
+        } else {
+            focus.#logError({
+                index: focus.#peek().index, // if we got nothing then the index didn't move
+                reason: `Variable Store operation expected.  Got '${focus.#peek().content}'.`
+            });
+        }
+
+        if (inline === false) {
+            focus.#post(product);
+        }
+        return product;
+    }
+
     #handlePathRun(precedingOperator, inline = false, that) {
         const focus = (() => {
             return !!this ? this : that
@@ -1389,7 +1483,7 @@ export class JobjeSTokenizer {
             } else {
                 // if the last toke was a separator or the current one is a sequence operator (, or +) or objectizer (>), this error message is skipped
                 if (
-                    product.content[product.content.length - 1].type !== TokeTypes.separator &&
+                    product.content[product.content.length - 1]?.type !== TokeTypes.separator &&
                     focus.#peek().family !== TokeFamilies.sequencing &&
                     focus.#peek().type !== TokeTypes.objectize
                 ) {

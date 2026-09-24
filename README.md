@@ -1,5 +1,9 @@
 # JobjeS
 
+## Feedback
+Feedback and bug reports are welcome.  
+Please report them on the github.
+
 # Version Information
 
 * Initial Version -- 1.0.1
@@ -35,7 +39,16 @@
             * Instance object `JobjeSInstance` is in namespace `jobjes/instance`.
 * version 1.6.0:
     * Fixed a bug in pathrun resolution that could clear the query results
-    * Added the ancestor operator (two separators side by side, '..' by default) to allow navigation in the opposite direction in the structure.
+    * Added the ancestor operator (two separators side by side, `..` by default) to allow navigation in the opposite direction in the structure.
+* version 1.6.1:
+    * Fixed a bug in the toke generator caused by "Boolean('false')" resolving to true.
+    * Fixed a bug in how jobjesStripeTracker handled consolidation.
+    * Added a contains method to jobjesPathTracker to test if one tracker is a subpath of another.
+* version 1.7.0:
+    * Added the variable store, storage `>>`, and retrieval operators `<<`.
+    * Reformatted the README.md file a little.
+    * Fixed a potential crash caused by an issue with token expectations.
+    * The static class `JobjeS` now provides `setInstance` and `getInstance` methods to allow assignment of a specific `JobjeSInstance` object for usage.  This is done instead of creating a fresh one each time, and will allow things like variable stores to persist from call to call on the static class.
 
 ## Introduction
 JobjeS is short for JavaScript Object Search.  It is a query language for validating and searching array and object structures within JavaScript.
@@ -87,6 +100,9 @@ Below are the selects within the system:
 * `@` : 
     * This select matches "any array" key.  This functions identically to '*' except that it does not match objects.  
 
+* `..`:
+    * The ancestor operator (two separators next to each other - `..` by default), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  See examples below.
+
 * Function : 
     * A function call follows the form `<key>;<parameter tag>`.  A `<parameter tag>` is a term, provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.  If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and as the left part of a full condition.  
 
@@ -126,8 +142,21 @@ Below are the selects within the system:
             * e.g. `$count('this is a query', $'this is a literal')`
     * External functions can return an object literal, array, or scalar value.  They change context, and thus count as selects.
 
-* `..`:
-    * The ancestor operator (two separators next to each other - `..` by default), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  See examples below.
+* Variable Store:
+    * The variable store is local to a jobjes instance.  This means that static `jobjes` calls will have no variables at the beginning of every call, but a declared and referenced `jobjesInstance` will keep variables between executions.  
+
+    * Note: Variables stored by a `jobjesInstance` can be cleared with a call to `clearVariables`.
+    * Note: The variable structure can be extracted via call to `getVariables`.
+    * Note: The variable structure can be set via a call to `setVariables`.
+    * Note that incorrect usage of the above methods can require that the variable store be cleared to correct it.
+
+    * Variables can be manipulated as follows:
+        * `>>[key]`: Store the current context in a variable with the given `<key>` as its name.  Does not change the context.
+        * `>>+[key]`: If the variable exists, and its root is an array, this will add it to that array.  Otherwise, it will place whatever is there in an array and add this to it.
+        * `<<[key]`: Retrieve the given variable's content and make it the new context.
+        * `<<`: The retrieval operator itself, without any `<key>`, will retrieve all stored variable values and make that array the new context.
+        * `>>-[key]`: Delete a variable with the given `<key>` as its name.  Does not change context.
+        * `<<-[key]`: Delete a variable with the given `<key>` as its name.  The context becomes the deleted variable's content.
 
 Below are the value items within the system:
 * Note that all definitions below are full conditions.  To convert them into nested conditions, simply remove the key and divider (default ':').
@@ -300,7 +329,7 @@ export const obj = {
 ```
 
 Note:
-In the examples below, both instanced and static examples are identical in their functionality.
+In the examples below, both instanced and static examples are identical in their functionality with the exception of the variable store.  The static variable store example demonstrates specific instance assignment. That allows static calls to always reference the same instance.  It also demonstrates deletion.
 
 The follow examples demonstrate the usage of the static wrapper class.  They have validation lines built in.
 ```
@@ -618,17 +647,54 @@ const log = (testName, toConsole = consoleOutput) => {
     };
 
     let functionParameterLog = [];
-    const appendation = JobjeS.where('awning listing.light.$append($"forgottenClient")', obj, customFunctionParameters, testErrorLog);    
+    const appendation = JobjeS.where('awning listing.light.$append($"forgottenClient")', obj, customFunctionParameters, testErrorLog);
     if (JSON.stringify(appendation) !== '[{"manufacturer":"Rawshank Builders","size":"medium","weight":"100kg"},{"manufacturer":"Lawshank Incorporated","size":"small","weight":"40kg"},{"manufacturer":"Complete Solutions Inc.","size":"small","weight":"62kg"},{"manufacturer":"Ted Industries","size":"tiny","weight":"100kg"}]') {
         log("appendation");
+    }
+
+    // add and use a custom external function
+    // Note:
+    //      this is an example of altering the context
+    JobjeS.addExternal(
+        "sortTests",
+        "Sorts the array on the 'tests' property.",
+        (context, monitoring) => {
+            let newContext = context;
+            if (!!context.toSorted) {
+                newContext = context.toSorted((a, b) => {
+                    // when nesting queries, always use a fresh instance for each inward tier
+                    const countA = JobjeS.where("projects.personnel", a);
+                    const countB = JobjeS.where("projects.personnel", b);
+
+                    let result = 0;
+                    if (countA.length === 1 && countB.length === 1) {
+                        result = Number(countA[0]) - Number(countB[0]);
+                    } else if (countA.length === 0 && countB.length === 1) {
+                        result = -1
+                    } else if (countA.length === 1 && countB.length === 0) {
+                        result = 1;
+                    }
+
+                    return result;
+                });
+            }
+
+            return newContext;
+        }
+    );
+
+    // this example sorts the tests array in the example data object
+    const sortTests = JobjeS.where('tests.$sortTests()', obj, undefined, testErrorLog);
+    if (JSON.stringify(sortTests) !== '[{"label":"Test4","outcome":true},{"label":"Test3","outcome":false,"projects":{"duration":"eight days","personnel":"2","leader":"Jared"}},{"label":"Test","outcome":true,"projects":{"duration":"two weeks","personnel":"4","leader":"Jared"}},{"label":"Test2","outcome":false,"projects":{"duration":"a week","personnel":"7","leader":"Scott"}}]') {
+        log("sortTests");
     }
 
     let i = 0;
 }
 
-// inverted separators
+// ancestor operators (..)
 {
-    // convension
+    // convension (to show a method for achieving this prior to the ancestor operator)
     const inverted1 = JobjeS.where('tests.@.projects.(duration."two weeks")', obj, undefined, testErrorLog);
     if (JSON.stringify(inverted1) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
         log("inverted1");
@@ -638,6 +704,93 @@ const log = (testName, toConsole = consoleOutput) => {
     const inverted2 = JobjeS.where('tests.@.projects.duration."two weeks"..', obj, undefined, testErrorLog);
     if (JSON.stringify(inverted2) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
         log("inverted2");
+    }
+
+    // nested inversions with boolean condition
+    // note that inversions do not need separators (they function as both)
+    const inverted3 = JobjeS.where('tests.@.projects.duration."two weeks"......@.outcome:false.label', obj, undefined, testErrorLog);
+    if (JSON.stringify(inverted3) !== '["Test2","Test3"]') {
+        log("inverted3");
+    }
+
+    let i = 0;
+}
+
+// variable storage
+{
+    // store and retrieve
+    const storageAndRetrieve = JobjeS.where('tests.@.label.>>var1.<<var1', obj, undefined, testErrorLog);
+    if (JSON.stringify(storageAndRetrieve) !== '["Test","Test2","Test3","Test4"]') {
+        log("storageAndRetrieve");
+    }
+
+    // add to store, multiple variables, and retrieve all (<< at the end)
+    const storeAndRetrieveAll = JobjeS.where('tests.@.label.>>+var1,seasons.winter.>>var2.<<', obj, undefined, testErrorLog);
+    if (JSON.stringify(storeAndRetrieveAll) !== '[["Test","Test2","Test3","Test4"],[{"var1":["Test","Test2","Test3","Test4"],"var2":{"temperature":"freezing","duration":"a few months","activities":["skiing","snowboarding"]}}]]') {
+        log("storeAndRetrieveAll");
+    }
+
+    // example variable usage:
+    //      grab the test array and store it in var1, 
+    //      regress to the root, 
+    //      go into seasons.winter
+    //      convert it (inclusively):
+    //          inclusively = automatically keeps all existing properties
+    //          add a 'tests' property with the value of variable var1
+    // the result of the conversion is then returned
+    const storage1 = JobjeS.where('tests.>>var1....seasons.winter.{+ <<var1+>tests}', obj, undefined, testErrorLog);
+    if (JSON.stringify(storage1) !== '[{"tests":[{"label":"Test","outcome":true,"projects":{"duration":"two weeks","personnel":"4","leader":"Jared"}},{"label":"Test2","outcome":false,"projects":{"duration":"a week","personnel":"7","leader":"Scott"}},{"label":"Test3","outcome":false,"projects":{"duration":"eight days","personnel":"2","leader":"Jared"}},{"label":"Test4","outcome":true}],"temperature":"freezing","duration":"a few months","activities":["skiing","snowboarding"]}]') {
+        log("storage1");
+    }
+
+    let i = 0;
+}
+
+// Static specific instance example
+{
+    // this is a demonstration of using the static class with a specific instance instance.  
+    const jjI = new JobjeSInstance(false, undefined, undefined, testErrors);
+
+    // getVariables actually returns the actual storage object,
+    // so we have to prevent updates
+    const currentVariables = JSON.stringify(jjI.getVariables());
+
+    let variables = undefined;
+    if (JobjeS.setInstance(jjI) === true) {
+        const specificInstance = JobjeS.where('tests.@.label.>>var1.<<var1', obj, undefined, testErrorLog);
+        if (JSON.stringify(specificInstance) !== '["Test","Test2","Test3","Test4"]') {
+            log("specificInstance");
+        }
+
+        // now that we've stored something, reset the instance to be generated fresh each time
+        JobjeS.setInstance();
+
+        // get the variables from the specific instance
+        variables = JSON.stringify(jjI.getVariables());
+        if (variables !== '{"var1":"Test4"}') {
+            log("variables");
+        }
+
+        // an explanation of the variable's contents vs the query result
+        // queries function by tracing each route through the structure to its fruition.
+        // if that route matches the query in its entirety, then it is added to the query's result
+        // the >>[key] storage operation overwrites any previous variable with the same name
+        // this means that each iteration through the tests.@ array in the structure ("Test","Test2","Test3","Test4")
+        // will overwrite the variable with the current label but each branch will conclude successfully.  
+        // This adds that value to the result (with <<[key])
+        // This means that, at its conclusion, the variable only contains the last value, but the query returns all four
+
+        // now, to demonstrate deletion, we will delete them
+        // note:
+        //      `<<-` removes the variable and retrieves its contents
+        //      `>>-` removes the variable and discards its contents (not changing the context)
+        // note: this uses the instance, so only two parameters
+        const var1 = jjI.where('<<-var1', obj);
+        if (JSON.stringify(var1) !== '["Test4"]') {
+            log("var1");
+        }
+
+        let e = 0;
     }
 
     let i = 0;
@@ -975,26 +1128,100 @@ const log = (testName, toConsole = consoleOutput) => {
 
     let functionParameterLog = [];
     const customFunctionExample = new JobjeSInstance(true, undefined, customFunctionParameters, functionParameterLog);
-    const appendation = customFunctionExample.where('awning listing.light.$append($"forgottenClient")', obj);    
+    const appendation = customFunctionExample.where('awning listing.light.$append($"forgottenClient")', obj);
     if (JSON.stringify(appendation) !== '[{"manufacturer":"Rawshank Builders","size":"medium","weight":"100kg"},{"manufacturer":"Lawshank Incorporated","size":"small","weight":"40kg"},{"manufacturer":"Complete Solutions Inc.","size":"small","weight":"62kg"},{"manufacturer":"Ted Industries","size":"tiny","weight":"100kg"}]') {
         log("appendation");
+    }
+
+    // add and use a custom external function
+    // Note:
+    //      this is an example of altering the context
+    JobjeSInstance.addExternal(
+        "sortTests",
+        "Sorts the array on the 'tests' property.",
+        (context, monitoring) => {
+            let newContext = context;
+            if (!!context.toSorted) {
+                newContext = context.toSorted((a, b) => {
+                    // when nesting queries, always use a fresh instance for each inward tier
+                    const countA = JobjeS.where("projects.personnel", a);
+                    const countB = JobjeS.where("projects.personnel", b);
+
+                    let result = 0;
+                    if (countA.length === 1 && countB.length === 1) {
+                        result = Number(countA[0]) - Number(countB[0]);
+                    } else if (countA.length === 0 && countB.length === 1) {
+                        result = -1
+                    } else if (countA.length === 1 && countB.length === 0) {
+                        result = 1;
+                    }
+
+                    return result;
+                });
+            }
+
+            return newContext;
+        }
+    );
+
+    // this example sorts the tests array in the example data object
+    const sortTests = jjI.where('tests.$sortTests()', obj);
+    if (JSON.stringify(sortTests) !== '[{"label":"Test4","outcome":true},{"label":"Test3","outcome":false,"projects":{"duration":"eight days","personnel":"2","leader":"Jared"}},{"label":"Test","outcome":true,"projects":{"duration":"two weeks","personnel":"4","leader":"Jared"}},{"label":"Test2","outcome":false,"projects":{"duration":"a week","personnel":"7","leader":"Scott"}}]') {
+        log("sortTests");
     }
 
     let i = 0;
 }
 
-// inverted separators
+// ancestor operators (..)
 {
-    // convension
-    const inverted1 = JobjeS.where('tests.@.projects.(duration."two weeks")', obj, undefined, testErrorLog);
+    // convension (to show a method for achieving this prior to the ancestor operator)
+    const inverted1 = jjI.where('tests.@.projects.(duration."two weeks")', obj);
     if (JSON.stringify(inverted1) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
         log("inverted1");
     }
 
     // inversion
-    const inverted2 = JobjeS.where('tests.@.projects.duration."two weeks"..', obj, undefined, testErrorLog);
+    const inverted2 = jjI.where('tests.@.projects.duration."two weeks"..', obj);
     if (JSON.stringify(inverted2) !== '[{"duration":"two weeks","personnel":"4","leader":"Jared"}]') {
         log("inverted2");
+    }
+
+    // nested inversions with boolean condition
+    // note that inversions do not need separators (they function as both)
+    const inverted3 = jjI.where('tests.@.projects.duration."two weeks"......@.outcome:false.label', obj);
+    if (JSON.stringify(inverted3) !== '["Test2","Test3"]') {
+        log("inverted3");
+    }
+
+    let i = 0;
+}
+
+// variable storage
+{
+    // store and retrieve
+    const storageAndRetrieve = jjI.where('tests.@.label.>>var1.<<var1', obj);
+    if (JSON.stringify(storageAndRetrieve) !== '["Test","Test2","Test3","Test4"]') {
+        log("storageAndRetrieve");
+    }
+
+    // add to store, multiple variables, and retrieve all (<< at the end)
+    const storeAndRetrieveAll = jjI.where('tests.@.label.>>+var1,seasons.winter.>>var2.<<', obj);
+    if (JSON.stringify(storeAndRetrieveAll) !== '[["Test","Test2","Test3","Test4"],[{"var1":["Test4","Test","Test2","Test3","Test4"],"var2":{"temperature":"freezing","duration":"a few months","activities":["skiing","snowboarding"]}}]]') {
+        log("storeAndRetrieveAll");
+    }
+
+    // example variable usage:
+    //      grab the test array and stores it in var1, 
+    //      regress to the root, 
+    //      goes into seasons.winter
+    //      converts it (inclusively):
+    //          inclusively = automatically keeps all existing properties
+    //          adds a 'tests' property with the value of variable var1
+    // the result of the conversion is then returned
+    const storage1 = jjI.where('tests.>>var1....seasons.winter.{+ <<var1+>tests}', obj);
+    if (JSON.stringify(storage1) !== '[{"tests":[{"label":"Test","outcome":true,"projects":{"duration":"two weeks","personnel":"4","leader":"Jared"}},{"label":"Test2","outcome":false,"projects":{"duration":"a week","personnel":"7","leader":"Scott"}},{"label":"Test3","outcome":false,"projects":{"duration":"eight days","personnel":"2","leader":"Jared"}},{"label":"Test4","outcome":true}],"temperature":"freezing","duration":"a few months","activities":["skiing","snowboarding"]}]') {
+        log("storage1");
     }
 
     let i = 0;
@@ -1004,6 +1231,3 @@ if (testErrors.length > 0) {
     throw new Error(`Errors were encountered during testing: ${testErrors.join(", ")}`);
 }
 ```
-## Feedback
-Feedback and bug reports are welcome.  
-Please report them on the github.

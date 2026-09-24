@@ -251,6 +251,32 @@ export default class jobjesPathTracker {
     }
 
     /**
+     * Checks to see if the given tracker is completely contained within the current one
+     * @param {jobjesPathTracker} tracker the tracker to test for
+     * @returns {boolean} true, if contained.  false, otherwise.
+     */
+    contains(tracker) {
+        // to be contained within this one, the given tracker cannot be equal or longer in length
+
+        let outcome = this.#path.length > tracker.#path.length;
+        if (outcome === true) {
+            // loop through
+            //      contains means that both paths must match until the shorter one (the tracker parameter) 
+            //      ends short of the comparing one
+            for (let index = 0; index < tracker.#path.length; index++) {
+                const match = this.#path[index] === tracker.#path[index];
+
+                if (match !== true) {
+                    outcome = false;
+                    break;
+                }
+            }
+        }
+
+        return outcome;
+    }
+
+    /**
      * Checks to see if the given item is in the track
      * @param {any} item Returns true if the given item exists within the path tracker
      * @returns {boolean} Returns true if the item is in the tracker

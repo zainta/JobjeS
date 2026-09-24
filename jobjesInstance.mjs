@@ -75,6 +75,8 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * 
  *          @ : This select matches "any array" key.  This functions identically to '*' except that it does not match objects.  
  * 
+ *         .. : The ancestor operator (two separators next to each other), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  
+ * 
  *   Function : A function call follows the form <key>;<parameter tag>.  A <parameter tag> is a term, 
  *          provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.
  *          If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and 
@@ -111,8 +113,24 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *                  e.g. $count('this is a query', $'this is a literal')
  *          External functions can return an object literal, array, or scalar value.  They change context, and thus count as selects.
  * 
- *      `..`:
- *          The ancestor operator (two separators next to each other), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  
+ *  Variable Store:
+ *          The variable store is local to a jobjes instance.  This means that static `jobjes` calls will have no variables at the beginning of 
+ *          every call, but a declared and referenced `jobjesInstance` will keep variables between executions.  
+ *
+ *          Note: Variables stored by a `jobjesInstance` can be cleared with a call to `clearVariables`.
+ *          Note: The variable structure can be extracted via call to `getVariables`.
+ *          Note: The variable structure can be set via a call to `setVariables`.
+ *          
+ *          Note that incorrect usage of the above methods can require that the variable store be cleared to correct it.  
+ * 
+ *          Variables are manipulated via the following actions:
+ *              `>>[key]`: Store the current context in a variable with the given `<key>` as its name.  Does not change the context.
+ *             `>>+[key]`: If the variable exists, and its root is an array, this will add it to that array.  Otherwise, it will place whatever is there in an array and add this to it.
+ *              `<<[key]`: Retrieve the given variable's content and make it the new context.
+ *                   `<<`: The retrieval operator itself, without any `<key>`, will retrieve all stored variable values and make that array 
+ *                         the new context.
+ *             `>>-[key]`: Delete a variable with the given `<key>` as its name.  Does not change context.
+ *             `<<-[key]`: Delete a variable with the given `<key>` as its name.  The context becomes the deleted variable's content.
  * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
@@ -179,7 +197,22 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * 
  *  version 1.6.0:
  *      Fixed a bug in pathrun resolution that could clear the query results
- *      Added the ancestor operator (two separators side by side, '..' by default) to allow navigation in the opposite direction in the structure.
+ *      Added the ancestor operator (two separators side by side, `..` by default) to allow navigation in the opposite direction in the structure.
+ * 
+ *  version 1.6.1:
+ *      Fixed a bug in the toke generator caused by "Boolean('false')" resolving to true.
+ *      Fixed a bug in how jobjesStripeTracker handled consolidation.
+ *      Added a contains method to jobjesPathTracker to test if one tracker is a subpath of another.
+ * 
+ * version 1.7.0:
+ *      Added the variable store, storage `>>`, and retrieval operators `<<`.
+ *      Reformatted the README.md file a little.
+ *      Fixed a potential crash caused by an issue with token expectations.
+ *      Updated log references in external handler.
+ *      The static class `JobjeS` now provides `setInstance` and `getInstance` methods to allow assignment of a specific `JobjeSInstance` 
+ *          object for usage.  This is done instead of creating a fresh one each time, and will allow things like variable stores to persist 
+ *          from call to call on the static class.
+ * 
  */
 export default class JobjeSInstance {
     #targetDivider = ':';
@@ -213,6 +246,8 @@ export default class JobjeSInstance {
             'desc': 'Takes an query result (param) and returns a contextual count from it.  String: length, Array: length, Object: number of properties.'
         }
     ];
+
+    #variableStore;
 
     /**
      * Safely adds an external function
@@ -251,6 +286,62 @@ export default class JobjeSInstance {
     }
 
     /**
+     * Retrieves the value of a variable and returns it.  If no variable is defined, returns undefined.
+     * @param {string} name The name of the variable
+     * @returns {any} The variable's value
+     */
+    #getVariable(name) {
+        return this.#variableStore[name];
+    }
+
+    /**
+     * Sets a variable in the store
+     * @param {string} name The name of the variable
+     * @param {*} value The variable's value
+     */
+    #setVariable(name, value) {
+        this.#variableStore[name] = value;
+    }
+
+    /**
+     * Deletes the given variable and returns its value
+     * @param {string} name The name of the variable
+     * @return {any} The variable's value
+     */
+    #deleteVariable(name) {
+        const variable = this.#variableStore[name];
+
+        if (this.#variableStore[name] !== undefined) {
+            delete this.#variableStore[name];
+        }
+
+        return variable;
+    }
+
+    /**
+     * Resets the variable store to empty
+     */
+    clearVariables() {
+        this.#variableStore = {};
+    }
+
+    /**
+     * Gets the current variable structure from the current instance
+     * @returns The current variable structure
+     */
+    getVariables() {
+        return this.#variableStore;
+    }
+
+    /**
+     * Replaces the variable structure with the provided one
+     * @param {object} variableStructure 
+     */
+    setVariables(variableStructure) {
+        this.#variableStore = variableStructure;
+    }
+
+    /**
      * Create a jobjes instance
      * @param {boolean} [autoResetLog=false] If true, every execution will automatically clear the log
      * @param {string} [divider=':'] The divider character to use
@@ -266,6 +357,7 @@ export default class JobjeSInstance {
         this.#targetDivider = divider;
         this.#pathseparator = separator;
         this.#log = new jobjesLog(logStorage);
+        this.#variableStore = {};
     }
 
     /**
@@ -615,6 +707,14 @@ export default class JobjeSInstance {
                 break;
             case TokenTypes.external:
                 outcome = this.#resolveExternal(step, target, result, log);
+                break;
+            case TokenTypes.getStore:
+            case TokenTypes.fromStore:
+            case TokenTypes.intoStore:
+            case TokenTypes.pushStore:
+            case TokenTypes.discardStore:
+            case TokenTypes.extractStore:
+                outcome = this.#resolveVariableStore(step, target, result, log);
                 break;
         }
 
@@ -1299,8 +1399,12 @@ export default class JobjeSInstance {
             } else if (subStep.type === TokenTypes.invertedSeparator) {
                 // inverted separators reverse progress along the current path by one item
                 const ancestor = this.#tracker.ancestor(workSets[0]);
-                resultingWork.push(ancestor);
-                currentResult = addResult(currentResult, ancestor, false);
+                if (!!ancestor) {
+                    resultingWork.push(ancestor);
+                    currentResult = addResult(currentResult, ancestor, false);
+                } else {
+                    this.#entry("Ancestor operator (..) would regress to a point prior to beginning.", subStep.index, {}, undefined, log);
+                }
             } else {
                 let responses = [];
                 // each successive step in the pathrun further filters the previous step's items
@@ -1987,13 +2091,85 @@ export default class JobjeSInstance {
                     outcome.matched = true;
                     outcome.target = funcResult;
                 } catch (ex) {
-                    log.push({ 'step': key, 'reason': `External evocation '${step.name}' threw exception.`, exception: ex });
+                    log.logError(`External evocation '${step.name}' threw exception.`, ex, step.index );
                 }
             } else {
-                log.push({ 'step': key, 'reason': `No such intrinic function is defined: '${step.name}'.` });
+                log.logError(`No such intrinic function is defined: '${step.name}'.`, undefined, step.index);
             }
         } else {
-            log.push({ 'step': key, 'reason': `Expected external evocation.  Got '${step}'` });
+            log.logError(`Expected external evocation.  Got '${step}'`, undefined, step.index);
+        }
+
+        return outcome;
+    }
+
+    /**
+     * Handles manipulation and retrieval of the variable store
+     * Returns this format:
+     *     { matched: <boolean>, [indexer: <function>], [target: <object>], [isSelect: <boolean>] }
+     *         matched tells resolve if the test passed, if false we return nothing
+     *         indexer is a function to generate a listing of targets to continue on, 
+     *             this supercedes target and will only be present in specific situations 
+     *             (like after resolving an array with a wildcard match)
+     *         target is a hard target transition, if present it will supercede the target function parameter
+     *         isSelect, if present,  will override default Select / non-Select behavior
+     * @param {object} step The function call step to resolve
+     * @param {object | Array} target The current contextual target within the queried structure
+     * @param {Array} result The result array.  Populated by endpoint matches
+     * @param {jobjesLog} log An optional log to post errors to
+     * @returns An object of the form { matched: <boolean>, [indexer: <function>], [target: <object>], [isSelect: <boolean>] }
+     */
+    #resolveVariableStore(step, target, result, log) {
+        let outcome = {
+            matched: false,
+            indexer: undefined,
+            target: undefined,
+            isSelect: true
+        };
+
+        switch (step.type) {
+            case TokenTypes.getStore:
+                outcome.matched = true;
+                outcome.target = this.#variableStore;
+                break;
+            case TokenTypes.pushStore:
+                outcome.matched = true;
+                outcome.target = target;
+                outcome.isSelect = false;
+
+                let current = this.#getVariable(step.content[0].content);
+                if (current !== undefined) {
+                    if (Array.isArray(current) === true) {
+                        this.#setVariable(step.content[0].content, [...current, target]);
+                    } else {
+                        this.#setVariable(step.content[0].content, [current, target]);
+                    }
+                } else {
+                    this.#setVariable(step.content[0].content, [target]);
+                }
+                break;
+            case TokenTypes.fromStore:
+                outcome.matched = true;
+                outcome.target = this.#getVariable(step.content[0].content);
+                break;
+            case TokenTypes.intoStore:
+                outcome.matched = true;
+                outcome.target = target;
+                outcome.isSelect = false;
+
+                this.#setVariable(step.content[0].content, target);
+                break;
+            case TokenTypes.discardStore:
+                outcome.matched = true;
+                outcome.target = target;
+                outcome.isSelect = false;
+
+                this.#deleteVariable(step.content[0].content);
+                break;
+            case TokenTypes.extractStore:
+                outcome.matched = true;
+                outcome.target = this.#deleteVariable(step.content[0].content);
+                break;
         }
 
         return outcome;

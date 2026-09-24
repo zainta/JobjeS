@@ -1,4 +1,4 @@
-import jobjesInstance from "./jobjesInstance.mjs";
+import JobjeSInstance from "./jobjesInstance.mjs";
 
 /*
 Copyright (C) Zain T. Al-Ahmary
@@ -72,6 +72,8 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  * 
  *          @ : This select matches "any array" key.  This functions identically to '*' except that it does not match objects.  
  * 
+ *         .. : The ancestor operator (two separators next to each other), or inverted separator, navigates up one level in the current context.  It always goes to the ancestor of the first result, if there are multiples.  
+ * 
  *   Function : A function call follows the form <key>;<parameter tag>.  A <parameter tag> is a term, 
  *          provided as a parameter as seen in the accompanying examples, that is a reference to the parameter array for the function.
  *          If the function does not require parameters, this should be omitted.  Functions can be used as normal selects and 
@@ -107,6 +109,25 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *                  Note: to provide literals to an external function, precede them with a '$'.  This will make the value immediately following count as a <parameter tag>, like those used for functions (see above).  Also reference Function Examples in the example code.
  *                  e.g. $count('this is a query', $'this is a literal')
  *          External functions can return an object literal, array, or scalar value.  They change context, and thus count as selects.
+ * 
+ *  Variable Store:
+ *          The variable store is local to a jobjes instance.  This means that static `jobjes` calls will have no variables at the beginning of 
+ *          every call, but a declared and referenced `jobjesInstance` will keep variables between executions.  
+ *
+ *          Note: Variables stored by a `jobjesInstance` can be cleared with a call to `clearVariables`.
+ *          Note: The variable structure can be extracted via call to `getVariables`.
+ *          Note: The variable structure can be set via a call to `setVariables`.
+ *          
+ *          Note that incorrect usage of the above methods can require that the variable store be cleared to correct it.  
+ * 
+ *          Variables are manipulated via the following actions:
+ *              `>>[key]`: Store the current context in a variable with the given `<key>` as its name.  Does not change the context.
+ *             `>>+[key]`: If the variable exists, and its root is an array, this will add it to that array.  Otherwise, it will place whatever is there in an array and add this to it.
+ *              `<<[key]`: Retrieve the given variable's content and make it the new context.
+ *                   `<<`: The retrieval operator itself, without any `<key>`, will retrieve all stored variable values and make that array 
+ *                         the new context.
+ *             `>>-[key]`: Delete a variable with the given `<key>` as its name.  Does not change context.
+ *             `<<-[key]`: Delete a variable with the given `<key>` as its name.  The context becomes the deleted variable's content.
  * 
  * Below are the value items within the system:
  *      Note that all definitions below are full conditions.  To convert them into nested conditions, 
@@ -170,8 +191,49 @@ MIT license.  I am not responsible for how you use or what happens as a result o
  *          Namespaces:
  *              Static object 'JobjeS' is in namespace 'jobjes'
  *              Instance object 'JobjeSInstance' is in namespace 'jobjes/instance'
+ * 
+ *  version 1.6.0:
+ *      Fixed a bug in pathrun resolution that could clear the query results
+ *      Added the ancestor operator (two separators side by side, `..` by default) to allow navigation in the opposite direction in the structure.
+ * 
+ *  version 1.6.1:
+ *      Fixed a bug in the toke generator caused by "Boolean('false')" resolving to true.
+ *      Fixed a bug in how jobjesStripeTracker handled consolidation.
+ *      Added a contains method to jobjesPathTracker to test if one tracker is a subpath of another.
+ * 
+ * version 1.7.0:
+ *      Added the variable store, storage `>>`, and retrieval operators `<<`.
+ *      Reformatted the README.md file a little.
+ *      Fixed a potential crash caused by an issue with token expectations.
+ *      The static class `JobjeS` now provides `setInstance` and `getInstance` methods to allow assignment of a specific `JobjeSInstance` 
+ *          object for usage.  This is done instead of creating a fresh one each time, and will allow things like variable stores to persist 
+ *          from call to call on the static class.
+ * 
  */
 export default class JobjeS {
+    static #instance = undefined;
+
+    /**
+     * Returns the current JobjeSInstance used for static calls.
+     * 
+     * If defined, the parameters beyond the query and subject will be ignored on query calls.
+     */
+    static getInstance() {
+        return this.#instance;
+    }
+
+    static setInstance(instance) {
+        if (instance instanceof JobjeSInstance) {
+            this.#instance = instance;
+
+            return true;
+        } else {
+            this.#instance = undefined;
+        }
+
+        return false;
+    }
+
     /**
      * Safely adds an external function
      * @param {string} name The unique name key of the function
@@ -180,7 +242,7 @@ export default class JobjeS {
      * @returns {object} an object describing the outcome.  The success property always states the outcome as true or false
      */
     static addExternal(name, description, func) {
-        return jobjesInstance.addExternal(name, description, func);
+        return JobjeSInstance.addExternal(name, description, func);
     }
 
     /**
@@ -188,7 +250,7 @@ export default class JobjeS {
      * @returns {object[]} The actual external function array instance
      */
     static getExternals() {
-        return jobjesInstance.getExternals();
+        return JobjeSInstance.getExternals();
     }
 
     /**
@@ -201,7 +263,7 @@ export default class JobjeS {
      * @returns {boolean} A value indicating if any matches were found
      */
     static match(query, subject, parameterDictionary, errorLog = []) {
-        const jjI = new jobjesInstance(true, undefined, parameterDictionary, errorLog);
+        const jjI = this.#instance !== undefined ? this.getInstance() : new JobjeSInstance(true, undefined, parameterDictionary, errorLog);
 
         return jjI.match(query, subject);
     }
@@ -217,7 +279,7 @@ export default class JobjeS {
      * @returns {any[]} The query's result
      */
     static with(query, subject, actionCallback = undefined, parameterDictionary = undefined, errorLog = []) {
-        const jjI = new jobjesInstance(true, actionCallback, parameterDictionary, errorLog);
+        const jjI = this.#instance !== undefined ? this.getInstance() : new JobjeSInstance(true, actionCallback, parameterDictionary, errorLog);
 
         return jjI.where(query, subject);
     }
@@ -232,7 +294,7 @@ export default class JobjeS {
      * @returns {any[]} The query's result
      */
     static where(query, subject, parameterDictionary, errorLog = []) {
-        const jjI = new jobjesInstance(true, undefined, parameterDictionary, errorLog);
+        const jjI = this.#instance !== undefined ? this.getInstance() : new JobjeSInstance(true, undefined, parameterDictionary, errorLog);
 
         return jjI.where(query, subject);
     }
@@ -249,7 +311,7 @@ export default class JobjeS {
      * @returns {any[]} The query's modified results
      */
     static insert(query, subject, item, key, parameterDictionary, errorLog = []) {
-        const jjI = new jobjesInstance(true, undefined, parameterDictionary, errorLog);
+        const jjI = this.#instance !== undefined ? this.getInstance() : new JobjeSInstance(true, undefined, parameterDictionary, errorLog);
         let outcome = jjI.where(query, subject);
 
         for (let i = 0; i < outcome.length; i++) {

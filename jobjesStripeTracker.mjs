@@ -187,7 +187,10 @@ export default class jobjesStripeTracker {
                 if (actual === true) {
                     const parent = this.ancestor(item);
                     if (Array.isArray(parent)) {
-                        parent.splice(parent.indexOf(item), 1);
+                        const itemIndex = parent.indexOf(item);
+                        if (itemIndex >= 0) {
+                            parent.splice(itemIndex, 1);
+                        }
                     } else if (typeof parent === 'object') {
                         // get the properties on the parent with the given item as their value
                         const keys = Object.entries(parent).filter((set) => set[1] === item).map((set) => set[0]);
@@ -213,11 +216,17 @@ export default class jobjesStripeTracker {
     #consolidate() {
         // loop through and note each unique path instance
         let kept = [];
-        for (let checkedIndex = 0; checkedIndex < this.#paths.length; checkedIndex++) {
-            const target = this.#paths[checkedIndex];
+
+        // sort descending so the longest paths are first
+        // this makes removing subpaths easier
+        const current = this.#paths.toSorted((a, b) => b.length() - a.length());
+        for (let checkedIndex = 0; checkedIndex < current.length; checkedIndex++) {
+            const target = current[checkedIndex];
 
             if (kept.filter((compared) => compared.equality(target)).length === 0) {
-                kept.push(target);
+                if (kept.some((compared) => compared.contains(target)) === false) {
+                    kept.push(target);
+                }
             }
         }
 

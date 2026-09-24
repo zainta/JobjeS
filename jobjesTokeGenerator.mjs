@@ -24,6 +24,19 @@ export const TokeTypes = {
     objectize: '>',
     enumerate: '<',
 
+    // very context sensitive:
+    //      >>[key] means store in variable [key]
+    //      >>+[key] means add the item to the variable (this ensures the variable will be an array at the root)
+    //      <<[key] means retrieve value from variable [key]
+    //      << means retrieve all stored values as an array
+    //      >>-[key] means delete given variable from store and discard value
+    //      <<-[key] means delete given variable and change context to value
+    store: '>>',
+    pushStore: '>>+',
+    retrieveStore: '<<',
+    discardStore: '>>-',
+    extractStore: '<<-',
+
     // conversions are self contained blocks that translate instances from one structure to another
     // in the future, they may support "reverse keying" to allow pulling values from other paths
     beginConversion: '{',
@@ -70,6 +83,7 @@ export const TokeFamilies = {
     key: 'key',
     conversion: 'conversion related',
     external: 'external',
+    variableStore: 'variable store',
 }
 
 /**
@@ -165,6 +179,10 @@ export class JobjeSTokeGenerator {
                 this.#getSequenceMarker();
             } else if (this.#peek() === '+' && this.#peek(1) !== '>') {
                 this.#getMergeSequenceMarker();
+            } else if (this.#peek(0, 2) === '>>') {
+                this.#getStoreContent();
+            } else if (this.#peek(0, 2) === '<<') {
+                this.#getRetrieveContent();
             } else if (this.#peek() === '>') {
                 this.#getObjectizeMarker();
             } else if (this.#peek() === '<') {
@@ -504,6 +522,55 @@ export class JobjeSTokeGenerator {
         this.#post(toke);
     }
 
+    #getStoreContent() {
+        let toke;
+        if (this.#peek(2) === '-') {
+            toke = {
+                index: this.#index,
+                type: TokeTypes.discardStore,
+                family: TokeFamilies.variableStore,
+                content: this.#pop(0, 3)
+            }
+        } else if (this.#peek(2) === '+') {
+            toke = {
+                index: this.#index,
+                type: TokeTypes.pushStore,
+                family: TokeFamilies.variableStore,
+                content: this.#pop(0, 3)
+            }
+        } else {
+            toke = {
+                index: this.#index,
+                type: TokeTypes.store,
+                family: TokeFamilies.variableStore,
+                content: this.#pop(0, 2)
+            }
+        }
+
+        this.#post(toke);
+    }
+
+    #getRetrieveContent() {
+        let toke;
+        if (this.#peek(2) === '-') {
+            toke = {
+                index: this.#index,
+                type: TokeTypes.extractStore,
+                family: TokeFamilies.variableStore,
+                content: this.#pop(0, 3)
+            }
+        } else {
+            toke = {
+                index: this.#index,
+                type: TokeTypes.retrieveStore,
+                family: TokeFamilies.variableStore,
+                content: this.#pop(0, 2)
+            }
+        }
+
+        this.#post(toke);
+    }
+
     #getObjectizeMarker() {
         let toke = {
             index: this.#index,
@@ -618,18 +685,20 @@ export class JobjeSTokeGenerator {
     #getBooleans() {
         let toke = undefined;
         if (this.#work.indexOf('true', this.#index) === this.#index) {
+            this.#delete(4);
             toke = {
                 index: this.#index,
                 type: TokeTypes.true,
                 family: TokeFamilies.expression,
-                content: Boolean(this.#delete(4))
+                content: true
             };
         } else if (this.#work.indexOf('false', this.#index) === this.#index) {
+            this.#delete(5);
             toke = {
                 index: this.#index,
                 type: TokeTypes.false,
                 family: TokeFamilies.expression,
-                content: Boolean(this.#delete(5))
+                content: false
             };
         }
 
